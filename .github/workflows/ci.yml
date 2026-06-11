@@ -1,0 +1,52 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  stylua:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: JohnnyMorganz/stylua-action@v4
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          version: latest
+          args: --check lua/ tests/
+
+  typecheck:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: stevearc/nvim-typecheck-action@v2
+        with:
+          path: lua
+          level: Error
+
+  test:
+    strategy:
+      fail-fast: false
+      matrix:
+        # version matrix on Linux (pure suite; macOS-only integration specs
+        # skip themselves there) + a macOS runner where they actually run.
+        include:
+          - { os: ubuntu-latest, rev: stable }
+          - { os: ubuntu-latest, rev: nightly }
+          - { os: macos-latest, rev: stable }
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v5
+      - uses: rhysd/action-setup-vim@v1
+        with:
+          neovim: true
+          version: ${{ matrix.rev }}
+      - name: smoke (modules load, config merges)
+        run: nvim --headless --clean --cmd "set rtp+=." -l scripts/smoke.lua
+      - name: specs
+        run: nvim --headless --clean --cmd "set rtp+=." -l tests/run.lua

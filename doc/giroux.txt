@@ -1,0 +1,221 @@
+*giroux.txt*  Observe and steer Claude Code agents across your machines
+
+Author:  Sam Eigen
+License: MIT
+
+==============================================================================
+CONTENTS                                                       *giroux-contents*
+
+  1. Introduction ........................... |giroux-introduction|
+  2. Requirements ........................... |giroux-requirements|
+  3. Setup .................................. |giroux-setup|
+  4. Capture wrapper ........................ |giroux-capture|
+  5. Commands ............................... |giroux-commands|
+  6. The roster ............................. |giroux-roster|
+  7. The feed ............................... |giroux-feed|
+  8. Steering ............................... |giroux-steering|
+  9. Dispatch and resume .................... |giroux-dispatch|
+ 10. State glyphs ........................... |giroux-state|
+ 11. Notifications .......................... |giroux-notifications|
+ 12. Configuration .......................... |giroux-config|
+ 13. How it works ........................... |giroux-internals|
+
+==============================================================================
+1. INTRODUCTION                                            *giroux-introduction*
+
+giroux is a Claude-Code-only cockpit for Neovim: from one editor, observe and
+steer every Claude Code session across your machines (local and over SSH).
+
+A Claude Code session writes a lossless JSONL transcript to
+`~/.claude/projects/<cwd-slug>/<uuid>.jsonl` — every assistant message,
+thinking block, tool call (with full input), tool result, and token usage.
+giroux tails that transcript, so observation is complete and never interrupts
+the agent. Steering rides tmux: sessions started through the capture wrapper
+(or `:GirouxDispatch`) live in a tmux session giroux can attach to and send to.
+
+Companion to parole.nvim: giroux supervises the work, parole reviews it.
+
+==============================================================================
+2. REQUIREMENTS                                            *giroux-requirements*
+
+- Neovim >= 0.11
+- `ssh` and `tmux`
+- macOS nodes today (uses BSD `stat`); Linux support is planned
+- Optional: `tailscale` (only for node auto-discovery)
+
+Run `:checkhealth giroux` to verify the environment per node.
+
+==============================================================================
+3. SETUP                                                          *giroux-setup*
+
+Call `require("giroux").setup({...})` (all keys optional): >lua
+
+  require("giroux").setup({
+    nodes = { workhorse = { host = "workhorse" } }, -- honors ~/.ssh/config
+    roots = { "~/Code" },          -- searched for repos on :GirouxDispatch
+    tripwires = { read = { "**/legacy/**" } },
+  })
+<
+The implicit node `local` (this machine) is always present.
+
+==============================================================================
+4. CAPTURE WRAPPER                                              *giroux-capture*
+
+Source `scripts/claude-wrapper.zsh` from your shell rc so interactive `claude`
+sessions you start by hand land in tmux and become steerable: >sh
+
+  # ~/.zshrc
+  [ -f /path/to/giroux.nvim/scripts/claude-wrapper.zsh ] \
+    && source /path/to/giroux.nvim/scripts/claude-wrapper.zsh
+<
+The wrapper passes through untouched when already inside tmux, when stdin or
+stdout is not a TTY, for `-p`/`--print` and utility subcommands, and when tmux
+is unavailable. `command claude` always runs the raw binary.
+
+Captured sessions get a minimal tmux status line, mouse mode, and a tab title
+that tracks the transcript's ai-title. They survive closing the terminal —
+reattach with `tmux attach -t giroux/...` or |:GirouxAttach|.
+
+==============================================================================
+5. COMMANDS                                                    *giroux-commands*
+
+:Giroux [node|node/prefix]                                            *:Giroux*
+    Open the roster. With an argument, jump to a node or session feed.
+
+:GirouxFeed [session]                                              *:GirouxFeed*
+    Live feed for a session (defaults to the most recently active).
+
+:GirouxQA [session]                                                  *:GirouxQA*
+    Q&A digest — your turns and prose answers, tool calls collapsed.
+
+:GirouxDispatch                                                *:GirouxDispatch*
+    Launch a new agent: node -> repo -> optional worktree -> context -> a
+    detached tmux session running claude. See |giroux-dispatch|.
+
+:GirouxAttach [session]                                          *:GirouxAttach*
+    Attach a session's tmux pane in a terminal tab (full TUI).
+
+:GirouxSteer [session]                                            *:GirouxSteer*
+    Compose a message into a session without attaching (`:w` sends).
+
+:GirouxClean [node]                                              *:GirouxClean*
+    Reap detached giroux tmux sessions idle longer than 30 minutes.
+
+==============================================================================
+6. THE ROSTER                                                    *giroux-roster*
+
+`:Giroux` lists every active session on every node, one per line, sorted so
+what needs you floats to the top. It renders live off the monitor — a state
+change shows within ~1s, no polling. A `▸` before a line marks a steerable
+session (a correlated tmux session); blank is observe-only.
+
+Keys:
+  <CR>  open feed              n   dispatch a new agent
+  a     attach (tmux)          s   steer (compose + send)
+  R     resume a dead session  S   stat sheet
+  Q     Q&A digest             r   refresh        q  close       ?  help
+
+==============================================================================
+7. THE FEED                                                        *giroux-feed*
+
+`:GirouxFeed` (or <CR> on the roster) is the live per-session transcript. Tool
+calls render as one-liners; <Tab> folds one open to its full command/diff.
+
+A pending question is never written to the transcript, so the feed reads the
+live question off the session's tmux pane and renders it as a block at the
+tail; <CR> on an option answers it (see |giroux-steering|).
+
+Keys:
+  <Tab> fold tool call         K   peek a wrapped line
+  ]]/[[ next/prev turn         a   attach        s  steer
+  <CR>  drill into a subagent, or answer the live question option
+  Q     Q&A digest             q   close         ?  help
+
+==============================================================================
+8. STEERING                                                    *giroux-steering*
+
+For a steerable (tmux-correlated) session:
+
+- Attach (`a`): the real TUI in a terminal tab. Esc passes through to the
+  agent (interrupt / Esc-Esc rewind); CTRL-Q leaves terminal mode; detach
+  with `CTRL-B d` (the agent keeps running).
+- Steer (`s`): a compose split; `:w` queues your message into the session
+  (Claude Code accepts input typed mid-turn), `:q` aborts.
+- Answer-pick (`<CR>` on a question option): giroux reads the live picker off
+  the pane and selects the option for you.
+
+Sessions without a tmux correlation are observe-only; steering degrades to a
+clear message, never an error.
+
+==============================================================================
+9. DISPATCH AND RESUME                                         *giroux-dispatch*
+
+`:GirouxDispatch` (or `n`) walks node -> repo -> optionally a fresh worktree
+-> a context compose split, then launches claude detached in tmux with a fresh
+session id. It clears Claude's folder-trust prompt automatically and follows
+the new transcript onto the roster, opening its feed.
+
+`R` on a dead or observe-only roster line resumes that session: giroux reads
+the session id from the transcript filename and the cwd from the transcript,
+then relaunches `claude --resume <id>` in a fresh tmux session.
+
+==============================================================================
+10. STATE GLYPHS                                                  *giroux-state*
+
+State is proven from the transcript, never guessed:
+
+  ●  working   — an unresolved tool call, or an open turn (generating)
+  ?  question  — a live AskUserQuestion (read from the pane for tmux sessions)
+  ○  idle      — clean turn end; waiting for you
+  ✗  dead      — work was pending but the file went silent far too long
+  ~  stale     — idle and old
+
+==============================================================================
+11. NOTIFICATIONS                                         *giroux-notifications*
+
+Interrupt-worthy moments (a session needs you, an agent died, a tripwire
+fired) are routed by `config.notify.levels` to a statusline badge,
+`vim.notify`, or a macOS banner. They fire on state entry; a condition already
+true when the monitor starts is counted on the badge without a banner.
+
+Add the badge to your statusline: >lua
+
+  vim.o.statusline = vim.o.statusline .. "%{v:lua.require'giroux.notify'.statusline()}"
+<
+==============================================================================
+12. CONFIGURATION                                                *giroux-config*
+
+Defaults (abbreviated): >lua
+
+  {
+    nodes = {},               -- name -> { host, claude_projects }
+    tmux_rename = true,       -- rename sessions to the transcript's ai-title
+    roots = { "~/Code" },     -- searched on :GirouxDispatch
+    refresh_interval = 30,
+    discover_interval = 10,
+    active_window = 240,      -- minutes of mtime considered "live"
+    dispatch = {
+      cmd = { "claude" },
+      flags = { "--dangerously-skip-permissions" },
+      tmux_prefix = "giroux",
+      worktree_dir = "~/.cache/giroux/worktrees",
+    },
+    tripwires = { read = {}, write = {} },
+    notify = { levels = { question = "macos", dead = "macos", end_of_turn = "statusline" } },
+    keymaps = { roster = {...}, feed = {...} },
+  }
+<
+Every keymap is remappable; set an action to `false` to disable it.
+
+==============================================================================
+13. HOW IT WORKS                                              *giroux-internals*
+
+One ssh channel per node tails every active transcript (path-prefixed, demuxed
+locally) — channel use is O(nodes), not O(sessions). The parser normalizes the
+JSONL into events; the unresolved-tool-call set plus turn-in-flight plus file
+age prove the state glyph. Steering correlates a transcript to its tmux session
+by cwd-slug with a creation-time tiebreak.
+
+Design rationale lives in DESIGN.md, the build map in ARCHITECTURE.md.
+
+vim:tw=78:ts=8:noet:ft=help:norl:
