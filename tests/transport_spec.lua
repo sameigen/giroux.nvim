@@ -34,7 +34,7 @@ return {
   end,
 
   ["transport: monitor runs one merged stream per node, live"] = function()
-    h.skip_unless(h.is_macos(), "discovery uses BSD stat -f (macOS); Linux support pending")
+    h.skip_unless(h.is_unix(), "needs a unix stat / tail -F (macOS or Linux)")
     local monitor = require("giroux.monitor")
     -- fake node: a temp claude_projects root, host=false = run locally
     local root = vim.fn.tempname()
@@ -109,7 +109,7 @@ return {
   end,
 
   ["transport: feed rides the node stream, falls back when monitor stops"] = function()
-    h.skip_unless(h.is_macos(), "discovery uses BSD stat -f (macOS); Linux support pending")
+    h.skip_unless(h.is_unix(), "needs a unix stat / tail -F (macOS or Linux)")
     local monitor = require("giroux.monitor")
     local feed_mod = require("giroux.feed")
     local root = vim.fn.tempname()

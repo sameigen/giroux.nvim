@@ -17,11 +17,19 @@ function M.has(bin)
   return vim.fn.executable(bin) == 1
 end
 
----True on a BSD-stat platform (macOS), which giroux's stat -f / tail -F
----integration paths require until Linux support lands.
+---True on a BSD-stat platform (macOS). Some integration specs (real zsh
+---wrapper, BSD stat formatting) are macOS-specific.
 ---@return boolean
 function M.is_macos()
   return vim.uv.os_uname().sysname == "Darwin"
+end
+
+---True where giroux's local discovery/tail paths work — macOS or Linux (both
+---now supported: portable GNU/BSD stat + `tail -F`).
+---@return boolean
+function M.is_unix()
+  local sys = vim.uv.os_uname().sysname
+  return sys == "Darwin" or sys == "Linux"
 end
 
 return M

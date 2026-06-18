@@ -77,8 +77,10 @@ function M.check()
       uname = vim.trim(uname or "")
       if uname == "Darwin" then
         h.ok("macOS (BSD stat/tail)")
+      elseif uname == "Linux" then
+        h.ok("Linux (GNU stat/tail)")
       elseif uname ~= "" then
-        h.error(uname .. " — unsupported for now; giroux uses BSD stat/tail (macOS). Linux support is planned.")
+        h.warn(uname .. " — unverified; giroux supports macOS and Linux nodes")
       end
       -- probe under a login shell: dispatch/steer run that way, so this matches
       -- reality (Homebrew's /opt/homebrew/bin isn't on the bare ssh PATH).
