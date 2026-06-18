@@ -104,16 +104,23 @@ reattach with `tmux attach -t giroux/...` or |:GirouxAttach|.
 ==============================================================================
 6. THE ROSTER                                                    *giroux-roster*
 
-`:Giroux` lists every active session on every node, one per line, sorted so
-what needs you floats to the top. It renders live off the monitor — a state
-change shows within ~1s, no polling. A `▸` before a line marks a steerable
-session (a correlated tmux session); blank is observe-only.
+`:Giroux` lists every active session, grouped (by machine, repo, or state),
+sorted so what needs you floats to the top of each group. It renders live off
+the monitor — a state change shows within ~1s, no polling. A `▸` before a line
+marks a steerable session (a correlated tmux session); blank is observe-only.
+
+Grouping: CTRL-S cycles machine -> repo -> state (the choice persists across
+runs). Default is by machine.
 
 Keys:
-  <CR>  open feed              n   dispatch a new agent
-  a     attach (tmux)          s   steer (compose + send)
-  R     resume a dead session  S   stat sheet
-  Q     Q&A digest             r   refresh        q  close       ?  help
+  <CR>  open feed / fold group  CTRL-S  cycle grouping
+  n     dispatch a new agent    a       attach (tmux)
+  s     steer (compose + send)  R       resume a dead session
+  S     stat sheet              Q       Q&A digest
+  r     refresh                 q       close            ?  help
+
+Note: some terminals swallow CTRL-S as XON/XOFF flow control; if it does
+nothing, `stty -ixon` in your shell rc fixes it, or remap `keymaps.roster.regroup`.
 
 ==============================================================================
 7. THE FEED                                                        *giroux-feed*
