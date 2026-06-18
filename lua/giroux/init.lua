@@ -19,7 +19,9 @@
 ---@field feed table<string, string|false> action -> lhs for feed buffers; false disables
 
 ---@class giroux.Config
----@field nodes table<string, giroux.NodeConfig> tailnet nodes to supervise; empty = discover via `tailscale status`
+---@field nodes table<string, giroux.NodeConfig> tailnet nodes to supervise (explicit config always wins)
+---@field discover boolean auto-discover online macOS tailnet peers via `tailscale status --json`
+---@field discover_tag string|nil only discover peers carrying this tailscale ACL tag (e.g. "tag:agent-host")
 ---@field tmux_rename boolean rename wrapper-minted tmux sessions to the transcript's ai-title
 ---@field roots string[] remote directories scanned for repos when dispatching
 ---@field refresh_interval integer seconds between roster auto-refreshes (0 disables)
@@ -37,6 +39,8 @@ local M = {}
 ---@type giroux.Config
 M.defaults = {
   nodes = {},
+  discover = false,
+  discover_tag = nil,
   tmux_rename = true,
   roots = { "~/Code" },
   refresh_interval = 30,
@@ -100,6 +104,11 @@ M.config = vim.deepcopy(M.defaults)
 ---@param opts giroux.Config|nil
 function M.setup(opts)
   M.config = vim.tbl_deep_extend("force", vim.deepcopy(M.defaults), opts or {})
+  -- Seed node discovery at setup so the cache is warm for entry points that read
+  -- it synchronously (dispatch, :checkhealth, clean) — not only the live monitor.
+  if M.config.discover then
+    require("giroux.nodes").refresh()
+  end
 end
 
 ---Open the roster, or jump straight to a session's feed.
