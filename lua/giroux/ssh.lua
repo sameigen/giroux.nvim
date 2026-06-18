@@ -5,10 +5,26 @@
 
 local M = {}
 
+---Wrap a command to run under a LOGIN shell on the target, so the user's
+---profile is sourced (~/.zshenv / ~/.zprofile): Homebrew PATH — so tmux and
+---claude are found over non-interactive ssh — and CLAUDE_CODE_OAUTH_TOKEN — so
+---dispatched agents authenticate WITHOUT an unlockable GUI keychain (the macOS
+---keychain is locked in non-GUI ssh, which is why claude hard-blocks on /login
+---at first API call). Quote-safe: single-quoted with embedded quotes escaped.
+---@param cmd string
+---@return string
+function M.login_wrap(cmd)
+  return ("${SHELL:-/bin/sh} -lc '%s'"):format((cmd:gsub("'", [['\'']])))
+end
+
 ---@param host string|nil ssh destination, nil = run locally
 ---@param cmd string shell command
+---@param opts {login?: boolean}|nil login = run under a login shell (PATH+auth)
 ---@return string[] argv
-function M.argv(host, cmd)
+function M.argv(host, cmd, opts)
+  if opts and opts.login then
+    cmd = M.login_wrap(cmd)
+  end
   if host then
     return { "ssh", "-o", "BatchMode=yes", host, cmd }
   end
@@ -19,8 +35,9 @@ end
 ---@param host string|nil
 ---@param cmd string
 ---@param cb fun(ok: boolean, stdout: string, stderr: string)
-function M.exec(host, cmd, cb)
-  vim.system(M.argv(host, cmd), { text = true }, function(out)
+---@param opts {login?: boolean}|nil
+function M.exec(host, cmd, cb, opts)
+  vim.system(M.argv(host, cmd, opts), { text = true }, function(out)
     vim.schedule(function()
       cb(out.code == 0, out.stdout or "", out.stderr or "")
     end)

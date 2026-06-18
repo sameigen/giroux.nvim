@@ -65,7 +65,11 @@ function M.launch_cmd(name, id, dir, prompt)
   vim.list_extend(argv, d.cmd)
   vim.list_extend(argv, d.flags or {})
   argv[#argv + 1] = prompt
-  local inner = table.concat(vim.tbl_map(shq, argv), " ")
+  -- login-wrap the agent itself: tmux runs this command in the (possibly stale)
+  -- server env, so the dispatched claude must source ~/.zshenv for its token and
+  -- ~/.zprofile for PATH — otherwise it falls back to the locked GUI keychain and
+  -- hard-blocks on /login at the first message.
+  local inner = ssh.login_wrap(table.concat(vim.tbl_map(shq, argv), " "))
   local set = function(opt, val)
     return ("tmux set-option -t %s %s %s >/dev/null"):format(shq(name), opt, val)
   end
@@ -110,12 +114,12 @@ local function accept_trust(node_name, name)
   local function poll()
     tries = tries + 1
     local probe = ("tmux capture-pane -p -t %s 2>/dev/null"):format(shq(name))
-    ssh.exec(node.host, probe, function(ok, stdout)
+    ssh.exec(node.host, ssh.login_wrap(probe), function(ok, stdout)
       if not ok then
         return
       end
       if stdout:find("trust this folder", 1, true) or stdout:find("Quick safety check", 1, true) then
-        ssh.exec(node.host, ("tmux send-keys -t %s Enter"):format(shq(name)), function() end)
+        ssh.exec(node.host, ssh.login_wrap(("tmux send-keys -t %s Enter"):format(shq(name))), function() end)
       elseif tries < 5 then
         vim.defer_fn(poll, 2000)
       end
@@ -161,7 +165,8 @@ local function launch_in(node_name, dir)
     local id = vim.fn.system("uuidgen"):lower():gsub("%-.*", ""):gsub("%s", "")
     local base = vim.fs.basename(dir):gsub("[^%w_-]", "-")
     local name = ("%s/%s-%s"):format(require("giroux").config.dispatch.tmux_prefix, base, id:sub(1, 4))
-    ssh.exec(node.host, M.launch_cmd(name, id, dir, prompt), function(ok, _, stderr)
+    -- outer login-wrap so `tmux` resolves on non-interactive ssh (Homebrew PATH)
+    ssh.exec(node.host, ssh.login_wrap(M.launch_cmd(name, id, dir, prompt)), function(ok, _, stderr)
       if not ok then
         return vim.notify("giroux: dispatch failed: " .. vim.trim(stderr or ""), vim.log.levels.ERROR)
       end
@@ -223,7 +228,11 @@ function M.resume_cmd(name, gid, dir, session_id)
   argv[#argv + 1] = "--resume"
   argv[#argv + 1] = session_id
   vim.list_extend(argv, d.flags or {})
-  local inner = table.concat(vim.tbl_map(shq, argv), " ")
+  -- login-wrap the agent itself: tmux runs this command in the (possibly stale)
+  -- server env, so the dispatched claude must source ~/.zshenv for its token and
+  -- ~/.zprofile for PATH — otherwise it falls back to the locked GUI keychain and
+  -- hard-blocks on /login at the first message.
+  local inner = ssh.login_wrap(table.concat(vim.tbl_map(shq, argv), " "))
   local set = function(opt, val)
     return ("tmux set-option -t %s %s %s >/dev/null"):format(shq(name), opt, val)
   end
@@ -262,7 +271,7 @@ function M.resume(node_name, session)
     local gid = vim.fn.system("uuidgen"):lower():gsub("%-.*", ""):gsub("%s", "")
     local base = vim.fs.basename(dir):gsub("[^%w_-]", "-")
     local name = ("%s/%s-%s"):format(require("giroux").config.dispatch.tmux_prefix, base, gid:sub(1, 4))
-    ssh.exec(node.host, M.resume_cmd(name, gid, dir, session_id), function(ok2, _, stderr)
+    ssh.exec(node.host, ssh.login_wrap(M.resume_cmd(name, gid, dir, session_id)), function(ok2, _, stderr)
       if not ok2 then
         return vim.notify("giroux: resume failed: " .. vim.trim(stderr or ""), vim.log.levels.ERROR)
       end
@@ -308,7 +317,7 @@ function M.clean(opts)
   for _, node_name in ipairs(names) do
     local _, node = nodes.get(node_name)
     local cmd = "tmux list-sessions -F '#{session_name}\t#{session_attached}\t#{session_activity}' 2>/dev/null"
-    ssh.exec(node.host, cmd, function(ok, stdout)
+    ssh.exec(node.host, ssh.login_wrap(cmd), function(ok, stdout)
       if not ok then
         return
       end
@@ -328,7 +337,11 @@ function M.clean(opts)
         end
         local targets = idx == 1 and reapable or { reapable[idx - 1] }
         for _, r in ipairs(targets) do
-          ssh.exec(node.host, ("tmux kill-session -t %s 2>/dev/null"):format(shq(r.name)), function() end)
+          ssh.exec(
+            node.host,
+            ssh.login_wrap(("tmux kill-session -t %s 2>/dev/null"):format(shq(r.name))),
+            function() end
+          )
         end
         tmuxctl.invalidate(node_name)
         vim.notify(("giroux: reaped %d session(s) on %s"):format(#targets, node_name))

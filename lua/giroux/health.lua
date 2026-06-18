@@ -2,6 +2,8 @@
 --- :checkhealth giroux — local prerequisites, then each configured node:
 --- reachable over ssh, tmux present, claude present, transcript dir readable.
 
+local ssh = require("giroux.ssh")
+
 local M = {}
 
 local function run(argv)
@@ -60,7 +62,12 @@ function M.check()
       h.ok("reachable over ssh")
     end
     do
-      local function on_node(cmd)
+      ---@param cmd string
+      ---@param login boolean|nil run under a login shell (matches dispatch: brew PATH + auth env)
+      local function on_node(cmd, login)
+        if login then
+          cmd = ssh.login_wrap(cmd)
+        end
         if node.host then
           return run({ "ssh", "-o", "BatchMode=yes", node.host, cmd })
         end
@@ -73,12 +80,37 @@ function M.check()
       elseif uname ~= "" then
         h.error(uname .. " — unsupported for now; giroux uses BSD stat/tail (macOS). Linux support is planned.")
       end
-      local tcode = on_node("command -v tmux")
+      -- probe under a login shell: dispatch/steer run that way, so this matches
+      -- reality (Homebrew's /opt/homebrew/bin isn't on the bare ssh PATH).
+      local tcode = on_node("command -v tmux", true)
       h[tcode == 0 and "ok" or "warn"](tcode == 0 and "tmux present" or "tmux missing — steering unavailable here")
-      local ccode = on_node("command -v claude")
+      local ccode = on_node("command -v claude", true)
       h[ccode == 0 and "ok" or "warn"](
         ccode == 0 and "claude present" or "claude missing — dispatch unavailable here"
       )
+      -- Auth: dispatched agents run under a login shell; without a token in the
+      -- login env they fall back to the GUI keychain, which is locked over ssh —
+      -- so claude hard-blocks on /login at the first message. (macOS-only risk;
+      -- Linux reads ~/.claude/.credentials.json, which is readable anywhere.)
+      -- Emit a marked line: a login shell may print profile chatter to stdout,
+      -- so key off the marker, not "non-empty output" (which a noisy ~/.zprofile
+      -- would falsely satisfy — a false "token present").
+      local _, tok = on_node('printf "giroux-auth:%s\\n" "${CLAUDE_CODE_OAUTH_TOKEN:+T}${ANTHROPIC_API_KEY:+K}"', true)
+      if (tok or ""):find("giroux%-auth:[TK]") then
+        h.ok("agent auth: token present in login env")
+      elseif uname == "Darwin" then
+        h.warn(
+          "no CLAUDE_CODE_OAUTH_TOKEN/ANTHROPIC_API_KEY in the login env — dispatched agents will hit /login "
+            .. "(the macOS keychain is locked over ssh). Fix: run `claude setup-token`, then add "
+            .. "`export CLAUDE_CODE_OAUTH_TOKEN=…` to ~/.zshenv"
+        )
+      else
+        local acode = on_node("test -r ~/.claude/.credentials.json && echo ok")
+        h[acode == 0 and "ok" or "warn"](
+          acode == 0 and "agent auth: credentials file present (~/.claude/.credentials.json)"
+            or "no auth token and no ~/.claude/.credentials.json — run `claude setup-token` or `claude` (/login)"
+        )
+      end
       local dcode, dout = on_node("test -r " .. node.claude_projects .. " && echo ok")
       local readable = dcode == 0 and (dout or ""):find("ok") ~= nil
       h[readable and "ok" or "warn"](

@@ -100,7 +100,7 @@ function M.sessions(node_name, cb)
   if not node then
     return cb({})
   end
-  ssh.exec(node.host, M.list_cmd(), function(ok, stdout)
+  ssh.exec(node.host, ssh.login_wrap(M.list_cmd()), function(ok, stdout)
     local list = ok and M.parse_list(stdout) or {}
     cache[node_name] = { at = os.time(), list = list }
     cb(list)
@@ -127,10 +127,14 @@ function M.maybe_rename(node_name, session, title)
     renamed[session.path] = title
     local _, node = nodes.get(node_name)
     local new_name = M.title_to_name(title)
-    ssh.exec(node.host, ("tmux rename-session -t '%s' '%s' 2>/dev/null"):format(t.name, new_name), function()
-      cache[node_name] = nil
-      session.tmux = new_name
-    end)
+    ssh.exec(
+      node.host,
+      ssh.login_wrap(("tmux rename-session -t '%s' '%s' 2>/dev/null"):format(t.name, new_name)),
+      function()
+        cache[node_name] = nil
+        session.tmux = new_name
+      end
+    )
   end)
 end
 

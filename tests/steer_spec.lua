@@ -129,7 +129,11 @@ return {
 
     local nasty = [[don't "break" $HOME `quoting` \n ok]]
     local cmd = dispatch.launch_cmd("giroux/x-1111", "id12", "/tmp/x", nasty)
-    vim.system({ "sh", "-c", ("PATH=%s:$PATH; %s"):format(dir, cmd) }, { text = true }):wait()
+    -- launch_cmd login-wraps the agent (${SHELL:-/bin/sh} -lc '…'); pin HOME and
+    -- SHELL so that login shell is deterministic and sources no real profile.
+    vim
+      .system({ "sh", "-c", ("HOME=%s SHELL=/bin/sh PATH=%s:$PATH; %s"):format(dir, dir, cmd) }, { text = true })
+      :wait()
     local fh = assert(io.open(log))
     local args = vim.split(fh:read("*a"), "\n", { trimempty = true })
     fh:close()
