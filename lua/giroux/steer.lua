@@ -58,7 +58,7 @@ function M.send(it, text, after)
       return
     end
     local _, node = nodes.get(it.node)
-    ssh.exec(node.host, M.send_cmd(target, text), function(ok, _, stderr)
+    ssh.exec(node.host, ssh.login_wrap(M.send_cmd(target, text)), function(ok, _, stderr)
       if not ok then
         return vim.notify("giroux: send failed: " .. vim.trim(stderr or ""), vim.log.levels.ERROR)
       end
@@ -144,7 +144,7 @@ function M.read_question(it, cb)
       return cb(nil)
     end
     local _, node = nodes.get(it.node)
-    ssh.exec(node.host, ("tmux capture-pane -p -t %s 2>/dev/null"):format(shq(t)), function(ok, stdout)
+    ssh.exec(node.host, ssh.login_wrap(("tmux capture-pane -p -t %s 2>/dev/null"):format(shq(t))), function(ok, stdout)
       cb(ok and M.parse_question(stdout) or nil)
     end)
   end
@@ -164,12 +164,16 @@ function M.answer(it, digit)
       return
     end
     local _, node = nodes.get(it.node)
-    ssh.exec(node.host, ("tmux send-keys -t %s %s"):format(shq(target), tostring(digit)), function(ok, _, stderr)
-      if not ok then
-        return vim.notify("giroux: answer failed: " .. vim.trim(stderr or ""), vim.log.levels.ERROR)
+    ssh.exec(
+      node.host,
+      ssh.login_wrap(("tmux send-keys -t %s %s"):format(shq(target), tostring(digit))),
+      function(ok, _, stderr)
+        if not ok then
+          return vim.notify("giroux: answer failed: " .. vim.trim(stderr or ""), vim.log.levels.ERROR)
+        end
+        vim.notify(("giroux: answered option %s on %s"):format(digit, target))
       end
-      vim.notify(("giroux: answered option %s on %s"):format(digit, target))
-    end)
+    )
   end)
 end
 
@@ -234,7 +238,7 @@ function M.attach(it)
     local _, node = nodes.get(it.node)
     local cmd
     if node.host then
-      cmd = { "ssh", "-t", node.host, ("tmux attach-session -t %s"):format(shq(target)) }
+      cmd = { "ssh", "-t", node.host, ssh.login_wrap(("tmux attach-session -t %s"):format(shq(target))) }
     else
       cmd = { "tmux", "attach-session", "-t", target }
     end
