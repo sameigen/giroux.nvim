@@ -82,6 +82,7 @@ end
 ---locally). No-op (and clears the cache) when config.discover is off. cb() once.
 ---@param cb fun()|nil
 local refreshing = false
+local pending = {} ---@type fun()[] callbacks waiting on the in-flight refresh
 function M.refresh(cb)
   local cfg = require("giroux").config
   if not cfg.discover then
@@ -89,18 +90,41 @@ function M.refresh(cb)
     discovered_at = os.time()
     return cb and cb()
   end
-  if refreshing then -- in-flight: don't pile up overlapping `tailscale status` calls
-    return cb and cb()
+  if cb then
+    pending[#pending + 1] = cb
+  end
+  if refreshing then
+    return -- coalesce overlapping calls; the in-flight refresh fires all queued cbs
   end
   refreshing = true
   ssh.exec(nil, "tailscale status --json 2>/dev/null", function(ok, stdout)
     refreshing = false
     discovered = ok and M.parse_tailscale(stdout, { tag = cfg.discover_tag, macos_only = true }) or {}
     discovered_at = os.time()
-    if cb then
-      cb()
+    local cbs = pending
+    pending = {}
+    for _, c in ipairs(cbs) do
+      c() -- callers queued mid-flight (e.g. monitor.start) now see the populated cache
     end
   end)
+end
+
+---Synchronous refresh for one-shot, blocking consumers (e.g. :checkhealth),
+---which can't wait on the async callback. Runs `tailscale status` locally.
+function M.refresh_sync()
+  local cfg = require("giroux").config
+  if not cfg.discover then
+    discovered = {}
+    discovered_at = os.time()
+    return
+  end
+  local ok, res = pcall(function()
+    return vim.system({ "sh", "-c", "tailscale status --json 2>/dev/null" }, { text = true }):wait()
+  end)
+  if ok and res.code == 0 then
+    discovered = M.parse_tailscale(res.stdout or "", { tag = cfg.discover_tag, macos_only = true })
+  end
+  discovered_at = os.time()
 end
 
 ---Refresh discovery if it's enabled and the cache is older than 60s. Fire and
