@@ -37,7 +37,14 @@ local function osascript(msg, title)
   if vim.g.giroux_focused and not cfg.macos_when_focused then
     return
   end
-  vim.system({
+  -- No osascript off macOS (e.g. a Linux node): degrade to vim.notify rather than
+  -- crash. vim.system raises ENOENT for a missing command, which — since the
+  -- default channel for question/dead is "macos" — would otherwise blow up the
+  -- monitor's derive() on the first ✗/? on Linux.
+  if vim.fn.executable("osascript") ~= 1 then
+    return vim.notify("giroux: " .. msg, vim.log.levels.INFO)
+  end
+  pcall(vim.system, {
     "osascript",
     "-e",
     ('display notification %q with title %q sound name "Glass"'):format(msg, title or "giroux"),

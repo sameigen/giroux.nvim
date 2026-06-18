@@ -1,6 +1,18 @@
 local notify = require("giroux.notify")
+local h = require("helpers")
 
 return {
+  ["notify: macos channel degrades to vim.notify off macOS (no crash)"] = function()
+    -- regression: default channel for question/dead is "macos"; on a Linux node
+    -- vim.system{"osascript"} raises ENOENT and used to crash monitor.derive().
+    h.skip_unless(vim.fn.executable("osascript") ~= 1, "needs a host without osascript")
+    require("giroux").setup({ notify = { levels = { dead = "macos", question = "macos" } } })
+    notify.reset()
+    local ok = pcall(notify.fire, "dead", { path = "/x", title = "X" }, "went dark")
+    assert(ok, "macos channel must not raise when osascript is absent")
+    notify.reset()
+  end,
+
   ["notify: badge counts live conditions, dedupes per state-entry"] = function()
     require("giroux").setup({ notify = { levels = { question = "statusline", dead = "statusline" } } })
     notify.reset()
