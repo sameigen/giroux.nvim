@@ -79,13 +79,38 @@ Configure the nodes to supervise:
 ```lua
 require("giroux").setup({
   nodes = { workhorse = { host = "workhorse" } }, -- honors ~/.ssh/config
+  discover = true,                  -- or: auto-discover online macOS tailnet peers
+  -- discover_tag = "tag:agent-host",  -- scope discovery to a tailscale ACL tag
   tripwires = { read = { "**/legacy/**" } },  -- ping when an agent reads stale code
 })
 ```
 
-For headless/remote auth on macOS, export `CLAUDE_CODE_OAUTH_TOKEN` (from
-`claude setup-token`) in the node's `~/.zshenv` — the login keychain is
-locked in non-GUI SSH sessions.
+With `discover = true`, online macOS peers from `tailscale status --json` are
+added automatically (keyed by their MagicDNS name), so the `nodes` table is
+optional; explicit config always wins.
+
+### Authentication (read this if dispatch hangs on `/login`)
+
+giroux runs the dispatched `claude` under a **login shell**, so it picks up
+auth and PATH from your profile. On macOS the login keychain is **locked in a
+non-GUI SSH/tmux context**, so an agent there can't read it and blocks on
+`/login` at the first message. Fix it once per node: run `claude setup-token`
+and export the result in the node's `~/.zshenv`:
+
+```sh
+export CLAUDE_CODE_OAUTH_TOKEN="…"   # from `claude setup-token`
+```
+
+`:checkhealth giroux` flags a node that's missing this before it bites.
+
+### Roster
+
+`:Giroux` opens the board. Sessions are grouped (default: by machine); `Ctrl+S`
+cycles machine → repo → state and the choice persists, `Enter` folds a group or
+opens a session, and what needs you floats to the top.
+
+> If `Ctrl+S` does nothing, your terminal is eating it as XON/XOFF flow control —
+> add `stty -ixon` to your shell rc, or remap `keymaps.roster.regroup`.
 
 ## Tests
 
