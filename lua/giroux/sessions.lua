@@ -53,11 +53,12 @@ function M.derive_state(pending, age_sec, in_turn)
 end
 
 ---"-Users-dev-Code-app" -> "~/Code/app" (lossy on dashed names; display only).
+---Strips the home prefix on macOS (-Users-<user>-) and Linux (-home-<user>-).
 function M.project_display(path)
   local slug = vim.fs.basename(vim.fs.dirname(path))
-  local user = slug:match("^%-Users%-([^%-]+)")
+  local user = slug:match("^%-Users%-([^%-]+)") or slug:match("^%-home%-([^%-]+)")
   if user then
-    slug = slug:gsub("^%-Users%-" .. user .. "%-?", "")
+    slug = slug:gsub("^%-Users%-" .. user .. "%-?", ""):gsub("^%-home%-" .. user .. "%-?", "")
   end
   if slug == "" then
     return "~"
@@ -138,9 +139,12 @@ function M.list(opts, cb)
   for name, node in pairs(all) do
     if not opts.node or opts.node == name then
       waiting = waiting + 1
+      -- portable stat: GNU (-c, Linux) with a BSD (-f, macOS) fallback. The GNU
+      -- form fails on macOS (no -c) and is silently skipped; vice-versa on Linux.
       local cmd = (
-        "find %s -name '*.jsonl' -not -path '*/subagents/*' -not -name journal.jsonl -mmin -%d "
-        .. "-exec stat -f '%%m %%z %%B %%N' {} + 2>/dev/null"
+        "find %s -name '*.jsonl' -not -path '*/subagents/*' -not -name journal.jsonl -mmin -%d 2>/dev/null"
+        .. " | while IFS= read -r f; do stat -c '%%Y %%s %%W %%n' \"$f\" 2>/dev/null"
+        .. " || stat -f '%%m %%z %%B %%N' \"$f\"; done"
       ):format(node.claude_projects, cfg.active_window)
       ssh.exec(node.host, cmd, function(ok, stdout)
         waiting = waiting - 1
@@ -183,11 +187,12 @@ function M.scan(opts, cb)
   for name, node in pairs(all) do
     if not opts.node or opts.node == name then
       waiting = waiting + 1
-      -- BSD stat (macOS nodes); Linux nodes need stat -c '%Y %s %W' — later.
+      -- portable stat: GNU (-c, Linux) with a BSD (-f, macOS) fallback.
       local cmd = (
         "find %s -name '*.jsonl' -not -path '*/subagents/*' -not -name journal.jsonl -mmin -%d 2>/dev/null"
-        .. ' | while IFS= read -r f; do printf \'%s %%s %%s\\n\' "$(stat -f \'%%m %%z %%B\' "$f")" "$f";'
-        .. " tail -c %d \"$f\"; printf '\\n'; done"
+        .. " | while IFS= read -r f; do"
+        .. ' s="$(stat -c \'%%Y %%s %%W\' "$f" 2>/dev/null || stat -f \'%%m %%z %%B\' "$f")";'
+        .. ' printf \'%s %%s %%s\\n\' "$s" "$f"; tail -c %d "$f"; printf \'\\n\'; done'
       ):format(node.claude_projects, cfg.active_window, MARK, M.TAIL_BYTES)
       ssh.exec(node.host, cmd, function(ok, stdout, stderr)
         waiting = waiting - 1

@@ -84,6 +84,9 @@ return {
     assert(sessions.project_display("/Users/dev/.claude/projects/-Users-dev-Code-app/x.jsonl") == "~/Code/app")
     assert(sessions.project_display("/Users/dev/.claude/projects/-Users-dev/x.jsonl") == "~")
     assert(sessions.project_display("/p/-Users-dev--cache-nvim-parole/x.jsonl") == "~/.cache/nvim/parole")
+    -- Linux home prefix (-home-<user>-) strips just like macOS
+    assert(sessions.project_display("/home/ko/.claude/projects/-home-ko-Code-personal/x.jsonl") == "~/Code/personal")
+    assert(sessions.project_display("/p/-home-ko/x.jsonl") == "~")
   end,
 
   ["sessions: parse_scan derives state from tails"] = function()

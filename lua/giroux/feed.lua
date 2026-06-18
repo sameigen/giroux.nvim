@@ -913,9 +913,11 @@ function M.resolve(arg, cb)
   for name, node in pairs(all) do
     if not want_node or want_node == name then
       waiting = waiting + 1
+      -- portable stat: GNU (-c, Linux) with a BSD (-f, macOS) fallback.
       local find = (
-        "find %s -name '*.jsonl' -not -path '*/subagents/*' -not -name journal.jsonl "
-        .. "-mmin -%d -exec stat -f '%%m %%N' {} + 2>/dev/null | sort -rn | head -5"
+        "find %s -name '*.jsonl' -not -path '*/subagents/*' -not -name journal.jsonl -mmin -%d 2>/dev/null"
+        .. " | while IFS= read -r f; do stat -c '%%Y %%n' \"$f\" 2>/dev/null"
+        .. " || stat -f '%%m %%N' \"$f\"; done | sort -rn | head -5"
       ):format(node.claude_projects, cfg.active_window)
       ssh.exec(node.host, find, function(ok, stdout)
         waiting = waiting - 1

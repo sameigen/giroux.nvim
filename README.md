@@ -68,9 +68,9 @@ the phased plan in [PLAN.md](PLAN.md).
 ## Requirements
 
 - Neovim ≥ 0.11, with `ssh` and `tmux` available
-- **macOS nodes only, for now.** Discovery uses BSD `stat`/`tail`, so giroux
-  works against macOS machines today; Linux support is [planned](PLAN.md).
-  `:checkhealth giroux` flags a node it can't support.
+- **macOS and Linux nodes.** Discovery is portable (GNU `stat -c` with a BSD
+  `stat -f` fallback) and `tail -F` works on both. `:checkhealth giroux` reports
+  each node's platform.
 
 ## Setup
 
