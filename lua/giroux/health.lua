@@ -51,6 +51,7 @@ function M.check()
     end
   end
 
+  nodes.refresh_sync() -- one-shot: populate discovered nodes synchronously so they appear here
   for name, node in pairs(nodes.all()) do
     h.start("giroux node: " .. name .. (node.host and (" (" .. node.host .. ")") or " (local)"))
     if node.host then
