@@ -53,3 +53,27 @@ end, { nargs = "?", desc = "Compose a message into a session without attaching (
 vim.api.nvim_create_user_command("GirouxClean", function(cmd)
   require("giroux.dispatch").clean({ node = cmd.args ~= "" and cmd.args or nil })
 end, { nargs = "?", desc = "Reap giroux tmux sessions whose claude process has exited" })
+
+-- Track editor focus so notify can honor `notify.macos_when_focused = false`:
+-- don't pop a macOS banner for a session you're already looking at. (Read by
+-- giroux.notify.) Default FALSE on purpose: FocusGained/FocusLost don't fire in
+-- every terminal/tmux/SSH setup, and a pager must fail LOUD — defaulting "not
+-- focused" means "notify when unsure" (a redundant banner at worst), whereas
+-- defaulting "focused" would silently suppress every page where focus events
+-- never arrive. When they do arrive, the flag tracks correctly.
+if vim.g.giroux_focused == nil then
+  vim.g.giroux_focused = false
+end
+local focus_grp = vim.api.nvim_create_augroup("giroux_focus", { clear = true })
+vim.api.nvim_create_autocmd("FocusGained", {
+  group = focus_grp,
+  callback = function()
+    vim.g.giroux_focused = true
+  end,
+})
+vim.api.nvim_create_autocmd("FocusLost", {
+  group = focus_grp,
+  callback = function()
+    vim.g.giroux_focused = false
+  end,
+})
