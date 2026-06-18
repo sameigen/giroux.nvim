@@ -12,16 +12,18 @@
 -- "-Users-demo-<repo>" slugs so the roster shows tidy project names.
 
 local root = vim.fn.tempname() .. "/giroux-demo"
-local projects = root .. "/projects"
-vim.fn.mkdir(projects, "p")
+local proj_a = root .. "/workhorse" -- one machine's ~/.claude/projects
+local proj_b = root .. "/gpu-box" -- a second machine on the tailnet
+vim.fn.mkdir(proj_a, "p")
+vim.fn.mkdir(proj_b, "p")
 
 local function J(t)
   return vim.json.encode(t)
 end
 
 ---@return string path
-local function transcript(repo, uuid, records)
-  local dir = projects .. "/-Users-demo-" .. repo
+local function transcript(base, repo, uuid, records)
+  local dir = base .. "/-Users-demo-" .. repo
   vim.fn.mkdir(dir, "p")
   local path = dir .. "/" .. uuid .. ".jsonl"
   local lines = {}
@@ -65,7 +67,7 @@ end
 
 -- hero: a migration investigation that ends idle; its (stubbed) pane holds the
 -- live question, so the probe flips it to ?.
-local hero = transcript("acme-api", "1111aaaa-0000-0000-0000-000000000001", {
+local hero = transcript(proj_a, "acme-api", "1111aaaa-0000-0000-0000-000000000001", {
   { type = "ai-title", aiTitle = "Investigate the failing staging migration" },
   {
     type = "user",
@@ -120,14 +122,18 @@ local hero = transcript("acme-api", "1111aaaa-0000-0000-0000-000000000001", {
   ),
   { type = "system", subtype = "turn_duration", uuid = "htd", durationMs = 18400, messageCount = 9 },
 })
+-- backdate the hero so it's idle long enough for the question-probe to fire on
+-- the first discovery tick — it reads as `?` (needs you) at the top of the roster.
+local uv = vim.uv or vim.loop
+uv.fs_utime(hero, os.time(), os.time() - 30)
 
-transcript("acme-web", "2222bbbb-0000-0000-0000-000000000002", {
+transcript(proj_a, "acme-web", "2222bbbb-0000-0000-0000-000000000002", {
   { type = "ai-title", aiTitle = "Add a dark-mode toggle to settings" },
   { type = "user", uuid = "w1", message = { role = "user", content = "add a dark mode toggle" } },
   tool("Edit", { file_path = "src/Settings.tsx" }, "Edit1"), -- unresolved -> ● working
 })
 
-transcript("acme-infra", "3333cccc-0000-0000-0000-000000000003", {
+transcript(proj_b, "acme-infra", "3333cccc-0000-0000-0000-000000000003", {
   { type = "ai-title", aiTitle = "Bump the Terraform AWS provider to 5.x" },
   { type = "user", uuid = "i1", message = { role = "user", content = "upgrade the aws provider to 5.x" } },
   text("Done — the plan is clean, no resource replacements.", "end_turn"),
@@ -145,9 +151,23 @@ vim.opt.fillchars = { eob = " " }
 vim.o.laststatus = 0
 
 require("giroux").setup({
-  nodes = { workhorse = { host = false, claude_projects = projects } },
+  nodes = {
+    workhorse = { host = false, claude_projects = proj_a },
+    ["gpu-box"] = { host = false, claude_projects = proj_b },
+  },
   discover_interval = 2,
+  -- keep the recording clean: no notification popups, and don't depend on osascript
+  notify = { levels = { question = "statusline", dead = "statusline", end_of_turn = "statusline" } },
 })
+
+-- Show only the fixture nodes — never the recorder's real local ~/.claude/projects.
+local nodes = require("giroux.nodes")
+local _all = nodes.all
+nodes.all = function()
+  local t = _all()
+  t["local"] = nil
+  return t
+end
 
 -- Deterministic stubs for the two pane-read seams (no tmux in the recording).
 local QUESTION = {
@@ -203,55 +223,55 @@ local function press(keys)
 end
 
 local steps = {
-  -- 1. the roster: three sessions, attention-sorted, live state glyphs
+  -- 1. the roster: sessions grouped by machine, attention-sorted, live glyphs
   {
     300,
     function()
-      vim.cmd("Giroux workhorse")
+      vim.cmd("Giroux")
     end,
   },
   {
-    1900,
+    3200,
     function()
-      cursor_to("staging migration") -- the ? session that needs you
+      cursor_to("staging migration") -- the ? session that needs you, floated to top
     end,
   },
   -- 2. drill into its feed
   {
-    2800,
+    4400,
     function()
       require("giroux.feed").open_path({ node = "workhorse", path = hero })
     end,
   },
   -- 3. unfold a tool call to reveal the full command + output (lossless)
   {
-    4600,
+    6200,
     function()
       cursor_to("^▸ read")
     end,
   },
   {
-    5200,
+    6800,
     function()
       press("<Tab>")
     end,
   },
   -- 4. answer its live question right from the feed
   {
-    7000,
+    8600,
     function()
       cursor_to("^%s+1%.")
     end,
   },
   {
-    7800,
+    9400,
     function()
       steer.pick({ node = "workhorse", path = hero })
     end,
   },
   -- 5. the stat sheet: what it wrote/read, where its context came from, spend
   {
-    9400,
+    11000,
     function()
       require("giroux.statsheet").open({
         node = "workhorse",
@@ -261,7 +281,7 @@ local steps = {
     end,
   },
   {
-    14500,
+    16000,
     function()
       vim.cmd("qa!")
     end,
