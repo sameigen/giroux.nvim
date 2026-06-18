@@ -67,6 +67,7 @@ M.defaults = {
   keymaps = {
     roster = {
       open_feed = "<CR>",
+      regroup = "<C-s>",
       attach = "a",
       steer = "s",
       dispatch = "n",

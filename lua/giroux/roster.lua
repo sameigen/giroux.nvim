@@ -1,17 +1,54 @@
 ---@module 'giroux.roster'
---- The board (:Giroux). One buffer, one session per line, sorted so what
---- needs you floats to the top. Renders live off giroux.monitor — every
---- active session is tailed, so a state change (●→?→○) shows within ~1s
---- without polling. State glyphs are proofs, not guesses.
+--- The board (:Giroux). Sessions grouped (by machine | repo | state) with what
+--- needs you floated to the top of every group. Renders live off giroux.monitor
+--- — every active session is tailed, so a state change (●→?→○) shows within ~1s
+--- without polling. State glyphs are proofs, not guesses. `Ctrl+S` cycles the
+--- grouping (the choice persists across runs); `Enter` on a group header folds it.
 
 local monitor = require("giroux.monitor")
 
 local M = {}
 
-local state = { buf = nil, items = {}, unsub = nil }
+local GROUPINGS = { "machine", "repo", "state" }
+
+local state = { buf = nil, items = {}, rows = {}, unsub = nil, group_by = nil, collapsed = {} }
+
+local ORDER = { ["?"] = 1, ["✗"] = 2, ["●"] = 3, ["○"] = 4, ["~"] = 5, ["·"] = 6 }
+local STATE_NAMES =
+  { ["?"] = "needs you", ["●"] = "working", ["○"] = "idle", ["✗"] = "dead", ["~"] = "stale", ["·"] = "starting" }
+
+-- The grouping choice persists across runs (matches Anthropic's Agent View).
+local function persist_path()
+  local dir = vim.fn.stdpath("state") .. "/giroux"
+  vim.fn.mkdir(dir, "p")
+  return dir .. "/roster.json"
+end
+
+local function load_group_by()
+  if not state.group_by then
+    local f = io.open(persist_path(), "r")
+    if f then
+      local ok, data = pcall(vim.json.decode, f:read("*a"))
+      f:close()
+      if ok and type(data) == "table" and vim.tbl_contains(GROUPINGS, data.group_by) then
+        state.group_by = data.group_by
+      end
+    end
+    state.group_by = state.group_by or "machine"
+  end
+  return state.group_by
+end
+
+local function save_group_by()
+  local f = io.open(persist_path(), "w")
+  if f then
+    f:write(vim.json.encode({ group_by = state.group_by }))
+    f:close()
+  end
+end
 
 local function age_str(mtime)
-  local d = os.time() - mtime
+  local d = os.time() - (mtime or os.time())
   if d < 60 then
     return ("%ds"):format(d)
   elseif d < 3600 then
@@ -29,11 +66,30 @@ local function trunc(s, n)
 end
 
 ---@param it giroux.Session
-function M._line(it)
+local function repo_of(it)
+  return vim.fs.basename(it.project or it.path or "") or "?"
+end
+
+---@param it giroux.Session
+---@param group_by string
+local function group_key(it, group_by)
+  if group_by == "machine" then
+    return it.node or "?"
+  elseif group_by == "repo" then
+    return repo_of(it)
+  end
+  return STATE_NAMES[it.state] or "?"
+end
+
+---One session line, indented under its group; the grouping dimension's own
+---column is dropped (redundant under the header).
+---@param it giroux.Session
+---@param hide string|nil "node" | "project" | nil
+function M._line(it, hide)
   local info
   if it.state == "?" and it.waiting_for and it.waiting_for ~= "" then
     info = "waiting: " .. it.waiting_for
-  elseif #it.pending > 0 then
+  elseif #(it.pending or {}) > 0 then
     info = "busy: " .. table.concat(it.pending, ", ")
   elseif it.activity and it.activity ~= "" then
     info = it.activity
@@ -44,18 +100,108 @@ function M._line(it)
     info = it.last_prompt and ("> " .. it.last_prompt) or ""
   end
   -- ▸ = steerable (a live tmux session giroux can attach/answer); blank =
-  -- observe-only (no correlated tmux — a hand-started raw claude or a dead
-  -- one). `R` resumes the latter from its transcript.
+  -- observe-only (no correlated tmux — a hand-started raw claude or a dead one).
   local ctl = it.tmux and "▸" or " "
-  return ("%s%s %-8s %-22s %-34s %4s  %s"):format(
-    it.state,
-    ctl,
-    trunc(it.node, 8),
-    trunc(it.project, 22),
-    trunc(it.title or vim.fs.basename(it.path), 34),
-    age_str(it.mtime),
-    trunc(info, 44)
+  local cols = { it.state .. ctl }
+  if hide ~= "node" then
+    cols[#cols + 1] = trunc(it.node, 8)
+  end
+  if hide ~= "project" then
+    cols[#cols + 1] = trunc(it.project, 22)
+  end
+  cols[#cols + 1] = trunc(it.title or vim.fs.basename(it.path), 34)
+  cols[#cols + 1] = ("%4s"):format(age_str(it.mtime))
+  cols[#cols + 1] = trunc(info, 44)
+  return "  " .. table.concat(cols, " ")
+end
+
+local function by_attention(a, b)
+  local oa, ob = ORDER[a.state] or 9, ORDER[b.state] or 9
+  if oa ~= ob then
+    return oa < ob
+  end
+  return (a.mtime or 0) > (b.mtime or 0)
+end
+
+---Build the grouped display: lines + a per-line row map (kind=title|header|item).
+---Pure (no buffer), so it is unit-tested directly.
+---@param items giroux.Session[]
+---@param group_by string
+---@param collapsed table<string, boolean>
+---@return {lines: string[], rows: table[]}
+function M.build(items, group_by, collapsed)
+  collapsed = collapsed or {}
+  local lines, rows = {}, {}
+  local function emit(line, row)
+    lines[#lines + 1] = line
+    rows[#lines] = row
+  end
+
+  local needs = 0
+  for _, it in ipairs(items) do
+    if it.state == "?" then
+      needs = needs + 1
+    end
+  end
+  emit(
+    ("giroux · %d session%s · needs you: %d · by %s · %s"):format(
+      #items,
+      #items == 1 and "" or "s",
+      needs,
+      group_by,
+      os.date("%H:%M:%S")
+    ),
+    { kind = "title" }
   )
+  emit("", { kind = "blank" })
+
+  -- bucket, then sort within each bucket attention-first
+  local groups, order = {}, {}
+  for _, it in ipairs(items) do
+    local k = group_key(it, group_by)
+    if not groups[k] then
+      groups[k] = {}
+      order[#order + 1] = k
+    end
+    groups[k][#groups[k] + 1] = it
+  end
+  for _, k in ipairs(order) do
+    table.sort(groups[k], by_attention)
+  end
+  -- order groups by their most-urgent member (groups[k][1] after the sort), then name
+  table.sort(order, function(a, b)
+    local ua = ORDER[groups[a][1].state] or 9
+    local ub = ORDER[groups[b][1].state] or 9
+    if ua ~= ub then
+      return ua < ub
+    end
+    return a < b
+  end)
+
+  local hide = (group_by == "machine" and "node") or (group_by == "repo" and "project") or nil
+  for _, k in ipairs(order) do
+    local g = groups[k]
+    local q, dead = 0, 0
+    for _, it in ipairs(g) do
+      if it.state == "?" then
+        q = q + 1
+      elseif it.state == "✗" then
+        dead = dead + 1
+      end
+    end
+    local badge = (q > 0 and ("  ?%d"):format(q) or "") .. (dead > 0 and (" ✗%d"):format(dead) or "")
+    -- namespace the fold key by grouping mode so folding repo "loper" doesn't
+    -- also fold a machine named "loper" after a Ctrl+S regroup.
+    local ckey = group_by .. "\0" .. k
+    local folded = collapsed[ckey] == true
+    emit(("%s %s (%d)%s"):format(folded and "▸" or "▾", k, #g, badge), { kind = "header", group = k, ckey = ckey })
+    if not folded then
+      for _, it in ipairs(g) do
+        emit(M._line(it, hide), { kind = "item", item = it })
+      end
+    end
+  end
+  return { lines = lines, rows = rows }
 end
 
 local function clean_window()
@@ -73,21 +219,25 @@ local function render(items, errs)
     return
   end
   state.items = items
-  local lines = { ("giroux · %d session%s · %s"):format(#items, #items == 1 and "" or "s", os.date("%H:%M:%S")) }
-  for _, it in ipairs(items) do
-    lines[#lines + 1] = M._line(it)
-  end
+  local r = M.build(items, state.group_by or "machine", state.collapsed)
   for node, err in pairs(errs or {}) do
-    lines[#lines + 1] = ("ERR %s: %s"):format(node, err)
+    r.lines[#r.lines + 1] = ("ERR %s: %s"):format(node, err)
+    r.rows[#r.lines] = { kind = "err" }
   end
+  state.rows = r.rows
   vim.bo[state.buf].modifiable = true
-  vim.api.nvim_buf_set_lines(state.buf, 0, -1, false, lines)
+  vim.api.nvim_buf_set_lines(state.buf, 0, -1, false, r.lines)
   vim.bo[state.buf].modifiable = false
 end
 
-local function item_at_cursor()
+local function row_at_cursor()
   local row = vim.api.nvim_win_get_cursor(0)[1]
-  return state.items[row - 1] -- line 1 is the header
+  return state.rows[row]
+end
+
+local function item_at_cursor()
+  local r = row_at_cursor()
+  return r and r.kind == "item" and r.item or nil
 end
 
 function M.refresh()
@@ -105,6 +255,7 @@ end
 function M.open(arg)
   local cfg = require("giroux").config
   local opts = arg and arg ~= "" and { node = arg } or {}
+  load_group_by()
   if state.buf and vim.api.nvim_buf_is_valid(state.buf) then
     vim.api.nvim_set_current_buf(state.buf)
     M.refresh()
@@ -126,12 +277,31 @@ function M.open(arg)
       vim.keymap.set("n", lhs, fn, { buffer = buf, nowait = true, desc = "giroux: " .. desc })
     end
   end
+  -- <CR>: open the feed on a session, or fold/unfold a group header
   map(km.open_feed, function()
-    local it = item_at_cursor()
-    if it then
-      require("giroux.feed").open_path({ node = it.node, path = it.path })
+    local r = row_at_cursor()
+    if not r then
+      return
     end
-  end, "open feed")
+    if r.kind == "header" then
+      state.collapsed[r.ckey] = not state.collapsed[r.ckey]
+      render(state.items, {})
+    elseif r.kind == "item" then
+      require("giroux.feed").open_path({ node = r.item.node, path = r.item.path })
+    end
+  end, "open feed / fold group")
+  map(km.regroup or "<C-s>", function()
+    local idx = 1
+    for n, g in ipairs(GROUPINGS) do
+      if g == state.group_by then
+        idx = n
+      end
+    end
+    state.group_by = GROUPINGS[idx % #GROUPINGS + 1]
+    save_group_by()
+    render(state.items, {})
+    vim.notify("giroux: grouped by " .. state.group_by)
+  end, "cycle grouping")
   map(km.refresh, function()
     M.refresh()
   end, "refresh")
@@ -180,7 +350,7 @@ function M.open(arg)
   end
   map(km.help, function()
     vim.notify(
-      "⏎ feed · n dispatch · a attach · s steer · R resume (dead) · S stats · Q digest · r refresh · q close"
+      "⏎ feed / fold · ^S regroup · n dispatch · a attach · s steer · R resume · S stats · Q digest · r refresh · q close"
         .. "  ·  ▸ = steerable, blank = observe-only",
       vim.log.levels.INFO
     )
@@ -201,8 +371,8 @@ function M.open(arg)
   vim.api.nvim_buf_set_lines(buf, 0, -1, false, { "giroux · scanning nodes…" })
   vim.bo[buf].modifiable = false
 
-  -- Render live off the monitor: every active session is tailed, so the
-  -- board reflects state changes within ~1s without a poll loop.
+  -- Render live off the monitor: every active session is tailed, so the board
+  -- reflects state changes within ~1s without a poll loop.
   state.unsub = monitor.subscribe(function(items)
     if state.buf and vim.api.nvim_buf_is_valid(state.buf) then
       render(items, {})
