@@ -22,6 +22,24 @@ Design choices:
 
 - Order: **transport fix first**, then capture → dispatch → steering.
 
+## v0.1 — shipped beyond the original phases
+
+Phases 1–5 (below) landed 2026-06-11. Tagged **v0.1** since:
+
+- **login-shell dispatch** — agents launch under a login shell so they inherit
+  auth (`CLAUDE_CODE_OAUTH_TOKEN`) + PATH; fixes the `/login` hardblock and the
+  tmux false-negative. `:checkhealth` gained an auth probe.
+- **`claude agents --json` enrichment** — live needs-you (`waitingFor`) and
+  process truth layered onto the roster; transcript tailing stays the feed.
+- **tailnet auto-discovery** — `discover = true` resolves online peers from
+  `tailscale status --json`; the hardcoded node list is now optional.
+- **grouped roster** — by machine / repo / state, `Ctrl+S` regroups (persists),
+  `Enter` folds, needs-you floated to the top of each group.
+- **Linux nodes** — portable `stat` (GNU with BSD fallback); the local box and
+  any Linux peer are observable, not just macOS.
+- **parole handoff** — parole's `agent.tmux` lands agents in the tmux substrate
+  giroux observes/steers; zero coupling (neither plugin imports the other).
+
 ## Phase 1 — transport: one merged tail per node (the MaxSessions fix)
 
 **STATUS: SHIPPED 2026-06-11.** Verified live: 9 real sessions → 1 node
