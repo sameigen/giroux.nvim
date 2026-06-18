@@ -31,7 +31,9 @@ end
 ---@param it giroux.Session
 function M._line(it)
   local info
-  if #it.pending > 0 then
+  if it.state == "?" and it.waiting_for and it.waiting_for ~= "" then
+    info = "waiting: " .. it.waiting_for
+  elseif #it.pending > 0 then
     info = "busy: " .. table.concat(it.pending, ", ")
   elseif it.activity and it.activity ~= "" then
     info = it.activity
