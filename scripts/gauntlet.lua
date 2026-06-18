@@ -74,10 +74,22 @@ for _, path in ipairs(files) do
 end
 
 totals.other = kinds.other or 0
-print(("files: %d  bytes: %.1fMB  events: %d  crashes: %d"):format(
-  totals.files, totals.bytes / 1024 / 1024, totals.events, totals.crashed))
-print(("unknown: %d (%.4f%%)  undecodable: %d  other(recognized): %d"):format(
-  totals.unknown, totals.events > 0 and 100 * totals.unknown / totals.events or 0, totals.undecodable, totals.other))
+print(
+  ("files: %d  bytes: %.1fMB  events: %d  crashes: %d"):format(
+    totals.files,
+    totals.bytes / 1024 / 1024,
+    totals.events,
+    totals.crashed
+  )
+)
+print(
+  ("unknown: %d (%.4f%%)  undecodable: %d  other(recognized): %d"):format(
+    totals.unknown,
+    totals.events > 0 and 100 * totals.unknown / totals.events or 0,
+    totals.undecodable,
+    totals.other
+  )
+)
 local kn = vim.tbl_keys(kinds)
 table.sort(kn, function(a, b)
   return kinds[a] > kinds[b]
