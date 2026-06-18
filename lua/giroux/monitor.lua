@@ -18,10 +18,19 @@ local state = {
   node_streams = {}, ---@type table<string, {stream: giroux.ssh.Stream, gen: integer, backoff: integer}>
   subscribers = {}, ---@type table<string, fun(list: table)>
   line_subs = {}, ---@type table<string, table<string, {on_line: fun(line: string, offset: integer), on_drop: fun()}>>
+  agents = {}, ---@type table<string, table<string, giroux.AgentEntry>> per node: sessionId -> live entry
   discover_timer = nil,
   debounce = nil,
   running = false,
 }
+
+---Session id from a transcript path (<slug>/<sessionId>.jsonl) — the key into
+---the `claude agents --json` map.
+---@param path string
+---@return string
+local function sid_of(path)
+  return (vim.fs.basename(path):gsub("%.jsonl$", ""))
+end
 
 local function key(node, path)
   return node .. "\0" .. path
@@ -62,16 +71,29 @@ local function derive(tr)
   -- staleness is the file's age, not when we happened to read it: only a
   -- live append (after we've caught up to the seed window) bumps the clock.
   local age = os.time() - (tr.session.mtime or os.time())
-  local state = sessions.derive_state(tr.parser:pending(), age, tr.parser:in_turn())
+  -- Enrich with `claude agents --json`, when available. It supplies the needs-you
+  -- signal (waitingFor) that a transcript tail can't, and a daemon-reported
+  -- "working" status. But "listed" does NOT prove "healthy" — a hung/zombie pid
+  -- can still appear — so dead/stale (and ●/○) stay owned by the transcript
+  -- heuristic, which is age-based and catches a process that's wedged with work
+  -- pending. (Earlier this clobbered ✗/~ whenever an entry existed; that hid the
+  -- "dead" alert for hung agents and is the bug this restores.)
+  local entry = (state.agents[tr.session.node] or {})[sid_of(tr.session.path)]
+  -- agents.classify trusts only the needs-you and actively-working signals;
+  -- it returns nil for everything else so the age-based transcript heuristic
+  -- still owns dead/stale/idle (a listed pid can be hung).
+  local st = require("giroux.agents").classify(entry)
+    or sessions.derive_state(tr.parser:pending(), age, tr.parser:in_turn())
   -- a pane-confirmed live question (AskUserQuestion never hits the transcript
-  -- while pending) overrides — but only while the file is recent enough that
-  -- the question can't already be stale-answered.
+  -- while pending) still wins, covering nodes/CC without `claude agents` —
+  -- but only while the file is recent enough that it can't be stale-answered.
   if tr.question and age <= 1800 then
-    state = "?"
+    st = "?"
   end
-  tr.session.state = state
+  tr.session.state = st
   tr.session.activity = tr.acc:recent_line()
   tr.session.touched = tr.acc.recent_files[#tr.acc.recent_files]
+  tr.session.waiting_for = entry and entry.waiting_for or nil
   tr.session.pending = {}
   for _, c in pairs(tr.parser:pending()) do
     tr.session.pending[#tr.session.pending + 1] = c.name
@@ -93,8 +115,8 @@ local function derive(tr)
       notify.fire(event, tr.session, msg)
     end
   end
-  signal("question", state == "?", "needs your input — " .. (tr.session.title or tr.session.project or ""))
-  signal("dead", state == "✗", "went dark with work pending — " .. (tr.session.title or tr.session.project or ""))
+  signal("question", st == "?", "needs your input — " .. (tr.session.title or tr.session.project or ""))
+  signal("dead", st == "✗", "went dark with work pending — " .. (tr.session.title or tr.session.project or ""))
 end
 
 ---Feed one complete transcript line to a tracker.
@@ -311,7 +333,34 @@ end
 
 function M.discover()
   sessions.list(state.opts or {}, reconcile)
+  M.refresh_agents()
   M.probe_questions()
+end
+
+---Pull `claude agents --json` for every tracked node and re-derive its sessions
+---with the fresh process/needs-you truth. Best-effort: a node without the
+---command (older CC) just yields an empty map and the transcript heuristic
+---stands. One ssh round-trip per node per tick.
+function M.refresh_agents()
+  local agents = require("giroux.agents")
+  local seen = {}
+  for _, tr in pairs(state.trackers) do
+    seen[tr.session.node] = true
+  end
+  for node_name in pairs(seen) do
+    agents.list(node_name, function(map)
+      if not state.running then
+        return -- a straggler landing after stop() must not resurrect the cleared map
+      end
+      state.agents[node_name] = map
+      for _, tr in pairs(state.trackers) do
+        if tr.session.node == node_name then
+          derive(tr)
+        end
+      end
+      notify()
+    end)
+  end
 end
 
 ---Correlate every tracked session to a tmux session (steerability) and, for
@@ -361,6 +410,7 @@ function M.stop()
     state.trackers[k] = nil
     drop_line_subs(k)
   end
+  state.agents = {}
   require("giroux.notify").reset()
 end
 
