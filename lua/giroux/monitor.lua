@@ -315,7 +315,10 @@ function M.start(opts)
     return
   end
   state.running = true
-  M.discover()
+  -- seed the discovered-node cache so the first pass already includes tailnet peers
+  nodes.refresh(function()
+    M.discover()
+  end)
   local interval = (require("giroux").config.discover_interval or 10) * 1000
   state.discover_timer = vim.uv.new_timer()
   state.discover_timer:start(
@@ -332,6 +335,7 @@ function M.start(opts)
 end
 
 function M.discover()
+  nodes.maybe_refresh() -- async; freshens the discovered-node cache for the next tick
   sessions.list(state.opts or {}, reconcile)
   M.refresh_agents()
   M.probe_questions()
