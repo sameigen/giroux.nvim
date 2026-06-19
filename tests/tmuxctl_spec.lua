@@ -38,13 +38,17 @@ return {
   end,
 
   ["tmuxctl: parse_list and correlate by slug + creation time"] = function()
+    -- fields: name, cwd, created, pane_title, gid. Title may carry spaces (and
+    -- Claude's state glyph) and may be empty; gid may be empty.
     local list = tmuxctl.parse_list(table.concat({
-      "giroux/app-a1b2\t/Users/dev/Code/app/sub\t1000\tdeadbeef",
-      "giroux/app-c3d4\t/Users/dev/Code/app/sub\t5000\t",
-      "giroux/web-e5f6\t/Users/dev/Code/web\t1000\tcafe1234",
+      "giroux/app-a1b2\t/Users/dev/Code/app/sub\t1000\t⠂ Build the thing\tdeadbeef",
+      "giroux/app-c3d4\t/Users/dev/Code/app/sub\t5000\t✳ Build the thing\t",
+      "giroux/web-e5f6\t/Users/dev/Code/web\t1000\t\tcafe1234",
     }, "\n"))
     assert(#list == 3, "parsed " .. #list)
     assert(list[1].gid == "deadbeef" and list[2].gid == nil)
+    assert(list[1].title == "⠂ Build the thing", "title with glyph + spaces: " .. tostring(list[1].title))
+    assert(list[3].title == nil, "empty title -> nil")
 
     local slug = "-Users-dev-Code-app-sub"
     local hit = tmuxctl.correlate(list, slug, 4990)
@@ -52,6 +56,17 @@ return {
     assert(tmuxctl.correlate(list, slug, 100000) == nil, "creation far from birth = different run")
     assert(tmuxctl.correlate(list, "-Users-dev-Code-web", 1001).name == "giroux/web-e5f6")
     assert(tmuxctl.correlate(list, "-Users-dev-Code-nope", 1000) == nil)
+  end,
+
+  ["tmuxctl: title_state reads Claude's live state glyph"] = function()
+    -- real captured titles: braille spinner = working, ✳ = idle
+    assert(tmuxctl.title_state("⠂ Deep dive into giroux.nvim") == "working")
+    assert(tmuxctl.title_state("⠐ Review codebase state") == "working")
+    assert(tmuxctl.title_state("✳ Set up Cozy Collective") == "idle")
+    -- a bare title or an unknown leading glyph is unknown, never a guess
+    assert(tmuxctl.title_state("Plain title, no glyph") == nil)
+    assert(tmuxctl.title_state("") == nil)
+    assert(tmuxctl.title_state(nil) == nil)
   end,
 
   ["tmuxctl: rename guards"] = function()

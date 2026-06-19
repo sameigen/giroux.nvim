@@ -12,6 +12,7 @@ local M = {}
 ---@field name string tmux session name (giroux/...)
 ---@field cwd string pane current path
 ---@field created integer epoch seconds
+---@field title string|nil pane title (Claude sets it to "<state-glyph> <ai-title>")
 ---@field gid string|nil GIROUX_SESSION_ID, when injected
 
 ---Claude's cwd -> project-slug transform.
@@ -21,12 +22,13 @@ function M.slugify(cwd)
   return (cwd:gsub("[/%.]", "-"))
 end
 
----One shell round-trip listing giroux tmux sessions with cwd, created, id.
+---One shell round-trip listing giroux tmux sessions with cwd, created, title,
+---id. pane_title carries Claude's live state glyph (spinner = working).
 ---@return string
 function M.list_cmd()
-  return [[tmux list-panes -a -F '#{session_name}	#{pane_current_path}	#{session_created}' 2>/dev/null ]]
-    .. [[| sort -u | while IFS='	' read -r s p c; do case "$s" in giroux/*) ]]
-    .. [[printf '%s\t%s\t%s\t%s\n' "$s" "$p" "$c" ]]
+  return [[tmux list-panes -a -F '#{session_name}	#{pane_current_path}	#{session_created}	#{pane_title}' 2>/dev/null ]]
+    .. [[| sort -u | while IFS='	' read -r s p c t; do case "$s" in giroux/*) ]]
+    .. [[printf '%s\t%s\t%s\t%s\t%s\n' "$s" "$p" "$c" "$t" ]]
     .. [["$(tmux show-environment -t "$s" GIROUX_SESSION_ID 2>/dev/null | cut -d= -f2)";; esac; done]]
 end
 
@@ -35,12 +37,37 @@ end
 function M.parse_list(stdout)
   local out = {}
   for line in vim.gsplit(stdout, "\n", { trimempty = true }) do
-    local name, cwd, created, gid = line:match("^([^\t]+)\t([^\t]+)\t(%d+)\t?(.*)$")
+    local name, cwd, created, title, gid = line:match("^([^\t]+)\t([^\t]+)\t(%d+)\t([^\t]*)\t?(.*)$")
     if name then
-      out[#out + 1] = { name = name, cwd = cwd, created = tonumber(created), gid = gid ~= "" and gid or nil }
+      out[#out + 1] = {
+        name = name,
+        cwd = cwd,
+        created = tonumber(created),
+        title = title ~= "" and title or nil,
+        gid = gid ~= "" and gid or nil,
+      }
     end
   end
   return out
+end
+
+---Classify Claude's pane-title state glyph. The TUI prefixes the title with a
+---braille spinner (U+2800–U+28FF) while generating and a ✳ (U+2733) when idle.
+---Strict: only the glyphs we've verified map to a state; anything else is nil
+---(unknown), never a guess. Verified live against real panes.
+---@param title string|nil
+---@return "working"|"idle"|nil
+function M.title_state(title)
+  if not title or title == "" then
+    return nil
+  end
+  local cp = vim.fn.strgetchar(title, 0)
+  if cp >= 0x2800 and cp <= 0x28FF then
+    return "working"
+  elseif cp == 0x2733 then
+    return "idle"
+  end
+  return nil
 end
 
 ---Best tmux session for a transcript: same cwd-slug, closest creation time.
@@ -148,6 +175,7 @@ function M.target(node_name, session, cb)
     local slug = vim.fs.basename(vim.fs.dirname(session.path))
     local t = M.correlate(list, slug, session.birth or session.mtime)
     session.tmux = t and t.name or nil
+    session.tmux_title = t and t.title or nil -- live state glyph for derive()
     cb(t and t.name or nil)
   end)
 end
