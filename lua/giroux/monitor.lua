@@ -40,6 +40,29 @@ end
 -- working and above plain idle, so "ready to review" floats up the roster.
 local ORDER = { ["?"] = 1, ["✗"] = 2, ["●"] = 3, ["✓"] = 4, ["○"] = 5, ["~"] = 6, ["·"] = 7 }
 
+---Lift a quiet state (○/~) to working (●) when a FRESH tmux title shows a live
+---spinner. The title is ground truth that the agent is generating — instant,
+---unlike the 10s agents poll, and available without `claude agents` at all.
+---Positive-only: ✓/?/✗ pass through untouched, so it can add a "working" but
+---never invent a needs-you or hide a done/death. Freshness-gated: a title
+---older than ~one discovery cycle proves nothing about *now* (it's captured
+---only on the probe tick), so a stale spinner can't flip a just-finished or
+---just-reviewed session back to working.
+---@param st string derived state glyph
+---@param title string|nil last-captured pane title
+---@param age integer seconds since that title was captured
+---@return string
+function M.title_lift(st, title, age)
+  if st ~= "○" and st ~= "~" then
+    return st
+  end
+  local ttl = (require("giroux").config.discover_interval or 10) + 6
+  if age <= ttl and require("giroux.tmuxctl").title_state(title) == "working" then
+    return "●"
+  end
+  return st
+end
+
 ---@return giroux.Session[] sorted attention-first
 function M.sessions()
   local list = {}
@@ -115,14 +138,10 @@ local function derive(tr, live)
     -- working again clears the latch; the next *witnessed* finish re-arms it.
     tr.done_unseen = false
   end
-  -- a live tmux title spinner is ground truth that the agent is generating —
-  -- instant, unlike the 10s agents poll, and works without `claude agents` at
-  -- all. Use it ONLY to lift a quiet session (idle/stale) to working; never to
-  -- override a fresh finish (✓), a question (?), or a death (✗). So it can add
-  -- a "working" but can never invent a needs-you or hide a done.
-  if (st == "○" or st == "~") and require("giroux.tmuxctl").title_state(tr.session.tmux_title) == "working" then
-    st = "●"
-    tr.done_unseen = false
+  local lifted = M.title_lift(st, tr.session.tmux_title, os.time() - (tr.session.tmux_title_at or 0))
+  if lifted ~= st then
+    st = lifted
+    tr.done_unseen = false -- it's working, not done
   end
   tr.session.state = st
   tr.session.activity = tr.acc:recent_line()

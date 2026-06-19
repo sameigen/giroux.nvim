@@ -176,6 +176,7 @@ function M.target(node_name, session, cb)
     local t = M.correlate(list, slug, session.birth or session.mtime)
     session.tmux = t and t.name or nil
     session.tmux_title = t and t.title or nil -- live state glyph for derive()
+    session.tmux_title_at = os.time() -- captured-at, so derive can ignore a stale spinner
     cb(t and t.name or nil)
   end)
 end
