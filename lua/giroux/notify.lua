@@ -14,14 +14,15 @@ local badge = { question = 0, dead = 0, tripwire = 0, end_of_turn = 0 }
 ---@return string
 function M.statusline()
   local parts = {}
+  -- ordered by urgency, matching the roster: needs-you, dead, done.
   if badge.question > 0 then
     parts[#parts + 1] = " " .. badge.question
   end
-  if badge.end_of_turn > 0 then
-    parts[#parts + 1] = "✓" .. badge.end_of_turn
-  end
   if badge.dead > 0 then
     parts[#parts + 1] = "✗" .. badge.dead
+  end
+  if badge.end_of_turn > 0 then
+    parts[#parts + 1] = "✓" .. badge.end_of_turn
   end
   if badge.tripwire > 0 then
     parts[#parts + 1] = "" .. badge.tripwire

@@ -128,14 +128,16 @@ function M.parse_scan(node_name, stdout, now)
 end
 
 ---Lightweight discovery: active session files with stat only (no content),
----for the live monitor to decide which sessions to tail. cb(list) once.
+---for the live monitor to decide which sessions to tail. cb(list, errored)
+---once; `errored` is a set of node names whose scan failed (so the caller can
+---keep their trackers instead of treating an empty result as "all gone").
 ---@param opts {node: string|nil}|nil
----@param cb fun(list: {node: string, path: string, mtime: integer, size: integer, project: string}[])
+---@param cb fun(list: {node: string, path: string, mtime: integer, size: integer, project: string}[], errored: table<string, boolean>)
 function M.list(opts, cb)
   opts = opts or {}
   local cfg = require("giroux").config
   local all = nodes.all()
-  local out, waiting = {}, 0
+  local out, errored, waiting = {}, {}, 0
   for name, node in pairs(all) do
     if not opts.node or opts.node == name then
       waiting = waiting + 1
@@ -162,15 +164,20 @@ function M.list(opts, cb)
               }
             end
           end
+        else
+          -- a node whose scan failed (ssh hiccup, node asleep) reports NO
+          -- sessions; the caller must not read that as "every session here is
+          -- gone" and drop their live trackers. Flag it so they're preserved.
+          errored[name] = true
         end
         if waiting == 0 then
-          cb(out)
+          cb(out, errored)
         end
       end)
     end
   end
   if waiting == 0 then
-    cb({})
+    cb({}, {})
   end
 end
 

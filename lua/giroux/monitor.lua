@@ -69,7 +69,13 @@ local function notify()
   end, 80)
 end
 
-local function derive(tr)
+---@param tr table
+---@param live boolean|nil true (default) when this derive reflects current
+---  reality (a live transcript append, an agents poll, an age flip); false
+---  during the initial seed/replay of historical transcript bytes, where a
+---  ●→○ edge is pre-watch history and must NOT latch a (✓) done/unseen.
+local function derive(tr, live)
+  live = live ~= false
   -- staleness is the file's age, not when we happened to read it: only a
   -- live append (after we've caught up to the seed window) bumps the clock.
   local age = os.time() - (tr.session.mtime or os.time())
@@ -99,12 +105,15 @@ local function derive(tr)
   -- stays idle, so opening the roster over old work doesn't light everything up.
   local prev = tr.session.state
   if st == "○" then
-    if prev == "●" then
+    if prev == "●" and live then
       tr.done_unseen = true
     end
     if tr.done_unseen then
       st = "✓"
     end
+  elseif st == "●" then
+    -- working again clears the latch; the next *witnessed* finish re-arms it.
+    tr.done_unseen = false
   end
   tr.session.state = st
   tr.session.activity = tr.acc:recent_line()
@@ -147,6 +156,10 @@ local function feed_line(tr, line)
     tr.parser = transcript.parser({ start_offset = tr.parser:resume_offset() + #line + 1 })
     return
   end
+  -- liveness: this line is a live append (vs pre-watch history being replayed)
+  -- iff it begins at/after the file size we saw when the tracker was created.
+  -- resume_offset() here is the byte where this line starts (pre-feed).
+  local live = tr.parser:resume_offset() >= (tr.live_after or 0)
   local cfg = require("giroux").config
   for _, e in ipairs(tr.parser:feed(line .. "\n")) do
     tr.acc:add(e)
@@ -174,7 +187,7 @@ local function feed_line(tr, line)
       )
     end
   end
-  derive(tr)
+  derive(tr, live)
   notify()
 end
 
@@ -240,6 +253,9 @@ local function start_tracker(s)
     acc = stats.new(),
     parser = transcript.parser({ start_offset = from }),
     skip_partial = s.size > SEED,
+    -- bytes up to here are pre-watch history (the seed window we replay); only
+    -- appends beyond it are "live" and may latch a (✓) done/unseen finish.
+    live_after = s.size,
   }
 end
 
@@ -250,7 +266,8 @@ local function drop_line_subs(k)
   state.line_subs[k] = nil
 end
 
-local function reconcile(found)
+local function reconcile(found, errored)
+  errored = errored or {}
   local seen, dirty = {}, {}
   for _, s in ipairs(found) do
     local k = key(s.node, s.path)
@@ -263,8 +280,17 @@ local function reconcile(found)
       dirty[s.node] = true
     end
   end
+  local n = require("giroux.notify")
   for k, tr in pairs(state.trackers) do
-    if not seen[k] then
+    -- drop a tracker only when its node scanned OK and the session genuinely
+    -- isn't there anymore — never on a node whose scan errored (a transient
+    -- ssh/find failure returns zero rows, which must not nuke live trackers).
+    if not seen[k] and not errored[tr.session.node] then
+      -- release this session's notification latches/badge counts; nothing else
+      -- clears them once the tracker is gone (else ?/✗/✓ badges leak forever).
+      n.clear("question", tr.session)
+      n.clear("dead", tr.session)
+      n.clear("end_of_turn", tr.session)
       dirty[tr.session.node] = true
       state.trackers[k] = nil
       drop_line_subs(k)
