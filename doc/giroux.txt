@@ -171,7 +171,9 @@ then relaunches `claude --resume <id>` in a fresh tmux session.
 
 State is proven from the transcript, never guessed:
 
-  ●  working   — an unresolved tool call, or an open turn (generating)
+  ●  working   — an unresolved tool call, or an open turn (generating). For a
+                 tmux-correlated session, a live title spinner also proves it,
+                 lifting a quiet ○/~ to ● instantly (no `claude agents` needed)
   ?  question  — a live AskUserQuestion (read from the pane for tmux sessions)
   ✓  done      — a turn that finished while you were watching, not yet
                  reviewed; ranks above idle. Opening its feed demotes it to ○

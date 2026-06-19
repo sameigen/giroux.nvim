@@ -115,6 +115,15 @@ local function derive(tr, live)
     -- working again clears the latch; the next *witnessed* finish re-arms it.
     tr.done_unseen = false
   end
+  -- a live tmux title spinner is ground truth that the agent is generating —
+  -- instant, unlike the 10s agents poll, and works without `claude agents` at
+  -- all. Use it ONLY to lift a quiet session (idle/stale) to working; never to
+  -- override a fresh finish (✓), a question (?), or a death (✗). So it can add
+  -- a "working" but can never invent a needs-you or hide a done.
+  if (st == "○" or st == "~") and require("giroux.tmuxctl").title_state(tr.session.tmux_title) == "working" then
+    st = "●"
+    tr.done_unseen = false
+  end
   tr.session.state = st
   tr.session.activity = tr.acc:recent_line()
   tr.session.touched = tr.acc.recent_files[#tr.acc.recent_files]
