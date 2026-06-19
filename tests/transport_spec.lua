@@ -84,7 +84,9 @@ return {
       end, 100),
       "witnessed turn close marks done/unseen (✓), got " .. tostring(state_of(f1))
     )
-    -- reviewing it (open feed → mark_seen) demotes ✓ → ○
+    -- the ✓ counts on the statusline badge…
+    assert(require("giroux.notify").statusline():find("✓1", 1, true), "done counts on the badge")
+    -- …and reviewing it (open feed → mark_seen) demotes ✓ → ○ and clears the badge
     monitor.mark_seen("fake", f1)
     assert(
       vim.wait(2000, function()
@@ -92,6 +94,7 @@ return {
       end, 50),
       "mark_seen demotes done → idle, got " .. tostring(state_of(f1))
     )
+    assert(not require("giroux.notify").statusline():find("✓", 1, true), "badge cleared after review")
 
     -- raw line subscription rides the same stream
     local lines, dropped = {}, false
@@ -183,6 +186,52 @@ return {
     )
 
     feed_mod.close(feed.buf)
+    vim.fn.delete(root, "rf")
+    require("giroux").setup({})
+  end,
+
+  ["transport: a turn finished before we watched replays as idle, never done"] = function()
+    h.skip_unless(h.is_unix(), "needs a unix stat / tail -F (macOS or Linux)")
+    local monitor = require("giroux.monitor")
+    local root = vim.fn.tempname()
+    local proj = root .. "/-Users-test-Code-app"
+    vim.fn.mkdir(proj, "p")
+    local f = proj .. "/cccccccc-0000-0000-0000-000000000001.jsonl"
+    local fh = assert(io.open(f, "a"))
+    -- a full working→idle turn, written ENTIRELY before the monitor starts:
+    -- on first sight this is pre-watch history, replayed with live=false.
+    fh:write(J({ type = "user", uuid = "u1", message = { role = "user", content = "do it" } }) .. "\n")
+    fh:write(J({ type = "system", subtype = "turn_duration", uuid = "t1", durationMs = 1, messageCount = 1 }) .. "\n")
+    fh:close()
+
+    require("giroux").setup({ nodes = { fake = { host = false, claude_projects = root } } })
+    local snaps = {}
+    local unsub = monitor.subscribe(function(list)
+      snaps[#snaps + 1] = list
+    end)
+    monitor.start({ node = "fake" })
+    local function state_of()
+      for _, s in ipairs(snaps[#snaps] or {}) do
+        if s.path == f then
+          return s.state
+        end
+      end
+    end
+    assert(
+      vim.wait(8000, function()
+        return state_of() == "○"
+      end, 100),
+      "a replayed (historical) turn settles idle, got " .. tostring(state_of())
+    )
+    -- hold a few ticks: a spurious latch from replaying the ●→○ edge would flip ✓
+    vim.wait(300, function()
+      return false
+    end, 100)
+    assert(state_of() == "○", "a historical finish must never latch ✓, got " .. tostring(state_of()))
+    assert(not require("giroux.notify").statusline():find("✓", 1, true), "no done badge for historical finishes")
+
+    unsub()
+    monitor.stop()
     vim.fn.delete(root, "rf")
     require("giroux").setup({})
   end,
