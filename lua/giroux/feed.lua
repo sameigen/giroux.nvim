@@ -22,6 +22,7 @@ local function define_hl()
   vim.api.nvim_set_hl(0, "GirouxStateWorking", { link = "DiagnosticOk", default = true })
   vim.api.nvim_set_hl(0, "GirouxStateQuestion", { link = "DiagnosticWarn", default = true })
   vim.api.nvim_set_hl(0, "GirouxStateIdle", { link = "Comment", default = true })
+  vim.api.nvim_set_hl(0, "GirouxStateDone", { link = "DiagnosticOk", default = true })
   vim.api.nvim_set_hl(0, "GirouxStateDead", { link = "DiagnosticError", default = true })
   vim.api.nvim_set_hl(0, "GirouxUserMsg", { link = "Visual", default = true })
   vim.api.nvim_set_hl(0, "GirouxUserSign", { link = "Special", default = true })
@@ -55,6 +56,7 @@ local SPIN = { "|", "/", "-", "\\" }
 local STATE = {
   ["●"] = { label = "working", hl = "GirouxStateWorking" },
   ["?"] = { label = "QUESTION", hl = "GirouxStateQuestion" },
+  ["✓"] = { label = "done", hl = "GirouxStateDone" },
   ["○"] = { label = "idle", hl = "GirouxStateIdle" },
   ["✗"] = { label = "dead", hl = "GirouxStateDead" },
   ["·"] = { label = "connecting", hl = "GirouxStateIdle" },
@@ -636,6 +638,7 @@ end
 function M.open_path(opts)
   local node_name, node = nodes.get(opts.node)
   assert(node, "unknown node: " .. tostring(opts.node))
+  require("giroux.monitor").mark_seen(node_name, opts.path) -- reviewing demotes ✓ (done) → ○ (idle)
   local bufname = ("giroux://feed/%s/%s"):format(node_name, vim.fs.basename(opts.path):gsub("%.jsonl$", ""))
   local existing = vim.fn.bufnr(bufname)
   if existing ~= -1 and feeds[existing] then

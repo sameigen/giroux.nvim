@@ -44,12 +44,45 @@ return {
     local r = roster.build(items, "machine", {})
     local header
     for _, l in ipairs(r.lines) do
-      if l:find("^▾ g ") then
+      if l:find("g (3)", 1, true) then
         header = l
       end
     end
-    assert(header and header:find("(3)", 1, true), "count: " .. tostring(header))
+    assert(header, "count: " .. vim.inspect(r.lines))
+    assert(header:find("^▾ %? g "), "leads with the most-urgent glyph (?): " .. tostring(header))
     assert(header:find("?1", 1, true) and header:find("✗1", 1, true), "badge: " .. tostring(header))
+  end,
+
+  ["roster: done (✓) ranks above idle and below working"] = function()
+    local items = {
+      sess({ node = "g", state = "○", project = "~/idle" }),
+      sess({ node = "g", state = "✓", project = "~/done" }),
+      sess({ node = "g", state = "●", project = "~/work" }),
+    }
+    local r = roster.build(items, "machine", {})
+    local order = {}
+    for _, row in ipairs(r.rows) do
+      if row.kind == "item" then
+        order[#order + 1] = row.item.state
+      end
+    end
+    assert(vim.deep_equal(order, { "●", "✓", "○" }), vim.inspect(order))
+  end,
+
+  ["roster: folded header telegraphs the group's most-urgent glyph + ✓ count"] = function()
+    local items = {
+      sess({ node = "g", state = "○" }),
+      sess({ node = "g", state = "✓" }),
+    }
+    local r = roster.build(items, "machine", { ["machine\0g"] = true }) -- folded
+    local header
+    for _, l in ipairs(r.lines) do
+      if l:find("g (2)", 1, true) then
+        header = l
+      end
+    end
+    assert(header and header:find("^▸ ✓ g "), "folded group leads with ✓: " .. tostring(header))
+    assert(header:find("✓1", 1, true), "done count in badge: " .. tostring(header))
   end,
 
   ["roster: collapsed group hides its items but keeps the header"] = function()

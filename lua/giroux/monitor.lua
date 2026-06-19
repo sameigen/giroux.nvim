@@ -36,7 +36,9 @@ local function key(node, path)
   return node .. "\0" .. path
 end
 
-local ORDER = { ["?"] = 1, ["✗"] = 2, ["●"] = 3, ["○"] = 4, ["~"] = 5, ["·"] = 6 }
+-- ✓ = done/unseen (a finished turn you haven't reviewed) ranks just under
+-- working and above plain idle, so "ready to review" floats up the roster.
+local ORDER = { ["?"] = 1, ["✗"] = 2, ["●"] = 3, ["✓"] = 4, ["○"] = 5, ["~"] = 6, ["·"] = 7 }
 
 ---@return giroux.Session[] sorted attention-first
 function M.sessions()
@@ -90,6 +92,20 @@ local function derive(tr)
   if tr.question and age <= 1800 then
     st = "?"
   end
+  -- done / unseen: a turn that just finished (working → idle) and hasn't been
+  -- reviewed is "done" (✓) — ready to look at — and ranks above plain idle.
+  -- Opening its feed (M.mark_seen) demotes it back to ○. Only a *witnessed*
+  -- finish latches it: a session found already idle on first sight (prev "·")
+  -- stays idle, so opening the roster over old work doesn't light everything up.
+  local prev = tr.session.state
+  if st == "○" then
+    if prev == "●" then
+      tr.done_unseen = true
+    end
+    if tr.done_unseen then
+      st = "✓"
+    end
+  end
   tr.session.state = st
   tr.session.activity = tr.acc:recent_line()
   tr.session.touched = tr.acc.recent_files[#tr.acc.recent_files]
@@ -117,6 +133,7 @@ local function derive(tr)
   end
   signal("question", st == "?", "needs your input — " .. (tr.session.title or tr.session.project or ""))
   signal("dead", st == "✗", "went dark with work pending — " .. (tr.session.title or tr.session.project or ""))
+  signal("end_of_turn", st == "✓", "finished — " .. (tr.session.title or tr.session.project or ""))
 end
 
 ---Feed one complete transcript line to a tracker.
@@ -257,6 +274,20 @@ local function reconcile(found)
     rebuild_stream(node_name)
   end
   notify()
+end
+
+---Mark a session as reviewed: clears its done/unseen latch so a ✓ ("done")
+---demotes back to ○ (idle). Called when its feed is opened. No-op for an
+---untracked session or one that isn't currently done/unseen.
+---@param node string
+---@param path string
+function M.mark_seen(node, path)
+  local tr = state.trackers[key(node, path)]
+  if tr and tr.done_unseen then
+    tr.done_unseen = false
+    derive(tr) -- recompute now so the ✓ → ○ flip + badge clear are immediate
+    notify()
+  end
 end
 
 ---True when the monitor is live-tailing this session (so a feed can ride the

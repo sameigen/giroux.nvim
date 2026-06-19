@@ -75,13 +75,22 @@ return {
     local trackers = vim.tbl_count(monitor._state.trackers)
     assert(trackers == 2, "two trackers sharing it, got " .. trackers)
 
-    -- live append flips state through the merged stream (no rediscovery)
+    -- live append flips state through the merged stream (no rediscovery). A
+    -- *witnessed* working→idle is "done/unseen" (✓), not plain idle.
     append(f1, { type = "system", subtype = "turn_duration", uuid = "t2", durationMs = 1, messageCount = 1 })
     assert(
       vim.wait(8000, function()
-        return state_of(f1) == "○"
+        return state_of(f1) == "✓"
       end, 100),
-      "live append must close the turn, got " .. tostring(state_of(f1))
+      "witnessed turn close marks done/unseen (✓), got " .. tostring(state_of(f1))
+    )
+    -- reviewing it (open feed → mark_seen) demotes ✓ → ○
+    monitor.mark_seen("fake", f1)
+    assert(
+      vim.wait(2000, function()
+        return state_of(f1) == "○"
+      end, 50),
+      "mark_seen demotes done → idle, got " .. tostring(state_of(f1))
     )
 
     -- raw line subscription rides the same stream
