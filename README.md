@@ -44,6 +44,11 @@ that feed live, proves agent state from transcript + process evidence, and
 `S` stat sheet · `Q` digest · `r` refresh · `q` close.
 A `▸` marks a **steerable** session (live tmux); blank is observe-only.
 
+State glyphs, most-urgent first: `?` needs you · `✗` dead · `●` working ·
+`✓` **done** (finished, not yet reviewed) · `○` idle · `~` stale. Each group
+header leads with its most-urgent member's glyph, so a *folded* group still
+telegraphs what's inside; opening a `✓` session's feed demotes it to `○`.
+
 ### Feed keys
 `<Tab>` fold · `K` peek line · `]]`/`[[` jump turns · `a` attach · `s` steer ·
 `<CR>` drill into a subagent, or answer the live question option · `Q` digest · `q` close

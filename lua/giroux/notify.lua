@@ -7,15 +7,18 @@
 local M = {}
 
 local fired = {} ---@type table<string, boolean> dedupe key -> true
-local badge = { question = 0, dead = 0, tripwire = 0 }
+local badge = { question = 0, dead = 0, tripwire = 0, end_of_turn = 0 }
 
----The statusline badge, e.g. "  2  ✗1". Empty when nothing is waiting.
+---The statusline badge, e.g. "  2  ✓3  ✗1". Empty when nothing is waiting.
 ---Put `%{v:lua.require'giroux.notify'.statusline()}` in your statusline.
 ---@return string
 function M.statusline()
   local parts = {}
   if badge.question > 0 then
     parts[#parts + 1] = " " .. badge.question
+  end
+  if badge.end_of_turn > 0 then
+    parts[#parts + 1] = "✓" .. badge.end_of_turn
   end
   if badge.dead > 0 then
     parts[#parts + 1] = "✗" .. badge.dead
@@ -104,7 +107,7 @@ end
 ---Reset all latches (e.g. monitor stop).
 function M.reset()
   fired = {}
-  badge = { question = 0, dead = 0, tripwire = 0 }
+  badge = { question = 0, dead = 0, tripwire = 0, end_of_turn = 0 }
   pcall(vim.cmd.redrawstatus)
 end
 

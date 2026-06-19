@@ -13,9 +13,18 @@ local GROUPINGS = { "machine", "repo", "state" }
 
 local state = { buf = nil, items = {}, rows = {}, unsub = nil, group_by = nil, collapsed = {} }
 
-local ORDER = { ["?"] = 1, ["✗"] = 2, ["●"] = 3, ["○"] = 4, ["~"] = 5, ["·"] = 6 }
-local STATE_NAMES =
-  { ["?"] = "needs you", ["●"] = "working", ["○"] = "idle", ["✗"] = "dead", ["~"] = "stale", ["·"] = "starting" }
+-- ✓ = done/unseen (finished, not yet reviewed) — see monitor.derive. It ranks
+-- below working and above idle so "ready to review" floats up.
+local ORDER = { ["?"] = 1, ["✗"] = 2, ["●"] = 3, ["✓"] = 4, ["○"] = 5, ["~"] = 6, ["·"] = 7 }
+local STATE_NAMES = {
+  ["?"] = "needs you",
+  ["●"] = "working",
+  ["✓"] = "done",
+  ["○"] = "idle",
+  ["✗"] = "dead",
+  ["~"] = "stale",
+  ["·"] = "starting",
+}
 
 -- The grouping choice persists across runs (matches Anthropic's Agent View).
 local function persist_path()
@@ -137,17 +146,20 @@ function M.build(items, group_by, collapsed)
     rows[#lines] = row
   end
 
-  local needs = 0
+  local needs, done = 0, 0
   for _, it in ipairs(items) do
     if it.state == "?" then
       needs = needs + 1
+    elseif it.state == "✓" then
+      done = done + 1
     end
   end
   emit(
-    ("giroux · %d session%s · needs you: %d · by %s · %s"):format(
+    ("giroux · %d session%s · needs you: %d%s · by %s · %s"):format(
       #items,
       #items == 1 and "" or "s",
       needs,
+      done > 0 and (" · done: " .. done) or "",
       group_by,
       os.date("%H:%M:%S")
     ),
@@ -181,20 +193,30 @@ function M.build(items, group_by, collapsed)
   local hide = (group_by == "machine" and "node") or (group_by == "repo" and "project") or nil
   for _, k in ipairs(order) do
     local g = groups[k]
-    local q, dead = 0, 0
+    local q, dead, done = 0, 0, 0
     for _, it in ipairs(g) do
       if it.state == "?" then
         q = q + 1
       elseif it.state == "✗" then
         dead = dead + 1
+      elseif it.state == "✓" then
+        done = done + 1
       end
     end
-    local badge = (q > 0 and ("  ?%d"):format(q) or "") .. (dead > 0 and (" ✗%d"):format(dead) or "")
+    local badge = (q > 0 and ("  ?%d"):format(q) or "")
+      .. (dead > 0 and (" ✗%d"):format(dead) or "")
+      .. (done > 0 and (" ✓%d"):format(done) or "")
     -- namespace the fold key by grouping mode so folding repo "loper" doesn't
     -- also fold a machine named "loper" after a Ctrl+S regroup.
     local ckey = group_by .. "\0" .. k
     local folded = collapsed[ckey] == true
-    emit(("%s %s (%d)%s"):format(folded and "▸" or "▾", k, #g, badge), { kind = "header", group = k, ckey = ckey })
+    -- rollup glyph: the group's most-urgent member (g[1] after the attention
+    -- sort) leads the header, so a *folded* group still telegraphs its state.
+    local lead = g[1].state
+    emit(
+      ("%s %s %s (%d)%s"):format(folded and "▸" or "▾", lead, k, #g, badge),
+      { kind = "header", group = k, ckey = ckey }
+    )
     if not folded then
       for _, it in ipairs(g) do
         emit(M._line(it, hide), { kind = "item", item = it })
@@ -351,7 +373,7 @@ function M.open(arg)
   map(km.help, function()
     vim.notify(
       "⏎ feed / fold · ^S regroup · n dispatch · a attach · s steer · R resume · S stats · Q digest · r refresh · q close"
-        .. "  ·  ▸ = steerable, blank = observe-only",
+        .. "  ·  ▸ = steerable, blank = observe-only  ·  ✓ = done (finished, unreviewed)",
       vim.log.levels.INFO
     )
   end, "help")

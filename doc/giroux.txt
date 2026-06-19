@@ -173,17 +173,26 @@ State is proven from the transcript, never guessed:
 
   ●  working   — an unresolved tool call, or an open turn (generating)
   ?  question  — a live AskUserQuestion (read from the pane for tmux sessions)
-  ○  idle      — clean turn end; waiting for you
+  ✓  done      — a turn that finished while you were watching, not yet
+                 reviewed; ranks above idle. Opening its feed demotes it to ○
+  ○  idle      — clean turn end; already reviewed (or idle on first sight)
   ✗  dead      — work was pending but the file went silent far too long
   ~  stale     — idle and old
+
+Each roster group header leads with its most-urgent member's glyph (a rollup),
+so a folded group still shows what's inside; the header badge counts `?` / `✗`
+/ `✓` members.
 
 ==============================================================================
 11. NOTIFICATIONS                                         *giroux-notifications*
 
-Interrupt-worthy moments (a session needs you, an agent died, a tripwire
-fired) are routed by `config.notify.levels` to a statusline badge,
+Interrupt-worthy moments (a session needs you, a turn finished, an agent died,
+a tripwire fired) are routed by `config.notify.levels` to a statusline badge,
 `vim.notify`, or a macOS banner. They fire on state entry; a condition already
-true when the monitor starts is counted on the badge without a banner.
+true when the monitor starts is counted on the badge without a banner. The
+`end_of_turn` event (a session reaching ✓ done) defaults to `statusline`
+(badge only) — set it to `notify` or `macos` to be pinged when an agent
+finishes.
 
 Add the badge to your statusline: >lua
 
