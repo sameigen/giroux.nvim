@@ -12,3 +12,4 @@ This project is registered in Sam's ops hub: `~/Code/personal/hub`. Read
 - End substantive sessions with `~/Code/personal/hub/bin/hub post giroux.nvim "<one-paragraph digest of what changed>"`.
 - When giroux.nvim's state meaningfully changes, update `~/Code/personal/hub/projects/giroux.nvim.md`
   (append to its Log, absolute dates only).
+- Push your commits before ending the session — unpushed work is invisible to other machines (the nightly digest nags about it).
