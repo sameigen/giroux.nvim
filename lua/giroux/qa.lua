@@ -157,6 +157,17 @@ local function apply(buf, lines, decos)
   end
 end
 
+---Error rows for a failed remote read (nonzero cat/ssh exit): the digest must
+---not render as an authoritative empty result on a read failure.
+---@param code integer
+---@return string[] lines
+function M._error_lines(code)
+  return {
+    "  giroux: read failed (exit " .. code .. ") — the transcript may have",
+    "  rotated, been removed, or the connection dropped. Try again.",
+  }
+end
+
 ---@param opts {node: string|nil, path: string, title: string|nil}
 function M.open(opts)
   local node_name, node = nodes.get(opts.node)
@@ -186,10 +197,14 @@ function M.open(opts)
 
   local parser = transcript.parser()
   local events = {}
-  ssh.stream(node.host, ("cat %s"):format(ssh.shq(opts.path)), function(chunk)
+  local strm = ssh.stream(node.host, ("cat %s"):format(ssh.shq(opts.path)), function(chunk)
     vim.list_extend(events, parser:feed(chunk))
-  end, function()
+  end, function(code)
     if not vim.api.nvim_buf_is_valid(buf) then
+      return
+    end
+    if code and code ~= 0 then
+      apply(buf, M._error_lines(code), {})
       return
     end
     local lines, decos, turns = M._render(M._build(events))
@@ -247,6 +262,17 @@ function M.open(opts)
       vim.api.nvim_buf_delete(buf, { force = true })
     end, { buffer = buf, nowait = true })
   end)
+  vim.api.nvim_create_autocmd("BufWipeout", {
+    buffer = buf,
+    once = true,
+    callback = function()
+      pcall(function()
+        if strm and strm.running and strm.running() then
+          strm.stop()
+        end
+      end)
+    end,
+  })
   return buf
 end
 

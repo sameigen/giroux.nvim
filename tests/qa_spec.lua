@@ -97,4 +97,12 @@ return {
     assert(text:find("? which?", 1, true), text)
     assert(text:find("1. A — a", 1, true), text)
   end,
+
+  ["qa: _error_lines surfaces the exit code, not an empty digest"] = function()
+    local lines = qa._error_lines(1)
+    assert(#lines > 0, "error render must not be empty")
+    local text = table.concat(lines, "\n")
+    assert(text:find("exit 1", 1, true), text)
+    assert(text:find("giroux:", 1, true), text)
+  end,
 }

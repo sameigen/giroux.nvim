@@ -19,6 +19,17 @@ local function fmt_tokens(n)
   return tostring(n)
 end
 
+---Error rows for a failed remote read (nonzero cat/ssh exit): the sheet must
+---not render as an authoritative empty result on a read failure.
+---@param code integer
+---@return string[] lines
+function M._error_lines(code)
+  return {
+    "  giroux: read failed (exit " .. code .. ") — the transcript may have",
+    "  rotated, been removed, or the connection dropped. Try again.",
+  }
+end
+
 ---Build the stat-sheet lines from a summary. Returns lines + a row->path map.
 ---@param sum table Acc:summary()
 ---@return string[] lines, table<integer,string> targets
@@ -141,8 +152,14 @@ function M.open(opts)
     for _, e in ipairs(parser:feed(chunk)) do
       acc:add(e)
     end
-  end, function()
+  end, function(code)
     if not vim.api.nvim_buf_is_valid(buf) then
+      return
+    end
+    if code and code ~= 0 then
+      vim.bo[buf].modifiable = true
+      vim.api.nvim_buf_set_lines(buf, 0, -1, false, M._error_lines(code))
+      vim.bo[buf].modifiable = false
       return
     end
     local lines, targets = M.render(acc:summary(), opts.title or vim.fs.basename(opts.path))
@@ -150,12 +167,18 @@ function M.open(opts)
     vim.api.nvim_buf_set_lines(buf, 0, -1, false, lines)
     vim.bo[buf].modifiable = false
     vim.b[buf].giroux_targets = targets
+    local is_local = not node.host -- host nil OR false == local (repo convention)
     vim.keymap.set("n", "<CR>", function()
       local row = vim.api.nvim_win_get_cursor(0)[1]
       local path = (vim.b[buf].giroux_targets or {})[row]
-      if path and vim.uv.fs_stat(path) then
-        vim.cmd.edit(vim.fn.fnameescape(path))
-      elseif path then
+      if not path then
+        return
+      end
+      if is_local and vim.uv.fs_stat(path) then
+        -- transcript-derived path: open without running its modelines/autocmds
+        vim.cmd("noautocmd edit " .. vim.fn.fnameescape(path))
+        vim.bo.modeline = false
+      else
         vim.notify("giroux: " .. path .. " (remote open not yet wired)", vim.log.levels.INFO)
       end
     end, { buffer = buf, nowait = true, desc = "giroux: open file" })
@@ -163,6 +186,17 @@ function M.open(opts)
       vim.api.nvim_buf_delete(buf, { force = true })
     end, { buffer = buf, nowait = true })
   end)
+  vim.api.nvim_create_autocmd("BufWipeout", {
+    buffer = buf,
+    once = true,
+    callback = function()
+      pcall(function()
+        if strm and strm.running and strm.running() then
+          strm.stop()
+        end
+      end)
+    end,
+  })
   return buf, strm
 end
 
