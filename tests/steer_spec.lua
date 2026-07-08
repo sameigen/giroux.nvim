@@ -145,6 +145,82 @@ return {
     assert(q.options[5].label == "Chat about this")
   end,
 
+  ["steer: parse_question detects a multiSelect picker (checkbox rows + footer)"] = function()
+    -- fixture built from the plan's described chrome (no live multiSelect pane
+    -- was capturable — plan 05 Step 4 STOP): checkbox/radio glyphs on option
+    -- rows instead of the single-select "❯ digit" cursor, and "Space to
+    -- select" footer wording instead of "Enter to select".
+    local pane = table.concat({
+      "✻ Worked for 4s",
+      "❯ ask which regions",
+      "────────────────────────────────",
+      " ☐ Regions",
+      "Which regions apply?",
+      "❯ ☑ 1. us-east",
+      "       Primary region",
+      "  ☐ 2. eu-west",
+      "       Secondary region",
+      "  ☐ 3. ap-south",
+      "       Tertiary region",
+      "Space to select · Enter to confirm · ↑/↓ to navigate · Esc to cancel",
+    }, "\n")
+    local q = steer.parse_question(pane)
+    assert(q, "must detect the multiSelect picker")
+    assert(q.multi_select == true, "multi_select must be true")
+    assert(q.question == "Which regions apply?", "question: " .. tostring(q.question))
+    assert(#q.options == 3, "3 options, got " .. #q.options)
+    assert(q.options[1].label == "us-east" and q.options[2].label == "eu-west" and q.options[3].label == "ap-south")
+    assert(q.index == nil and q.total == nil, "no progress marker in this fixture")
+  end,
+
+  ["steer: parse_question detects a multi-question progress marker (index/total)"] = function()
+    -- fixture: a "Question N of M" progress chip above the picker (per the
+    -- plan's description of multi-question AskUserQuestion chrome).
+    local pane = table.concat({
+      "✻ Worked for 4s",
+      "❯ ask two things",
+      "────────────────────────────────",
+      " ☐ Approach",
+      "Question 1 of 2",
+      "Which authorization path?",
+      "❯ 1. Owner debug build available",
+      "  2. Authorized to repackage IPA",
+      "  3. Not sure yet",
+      "Enter to select · ↑/↓ to navigate · Esc to cancel",
+    }, "\n")
+    local q = steer.parse_question(pane)
+    assert(q, "must detect the picker")
+    assert(q.index == 1 and q.total == 2, ("index/total: %s/%s"):format(tostring(q.index), tostring(q.total)))
+    assert(q.multi_select == false, "this question is single-select")
+    assert(q.question == "Which authorization path?", "question: " .. tostring(q.question))
+    assert(#q.options == 3)
+  end,
+
+  ["steer: parse_question regresses to multi_select == false and no index/total on a plain single question"] = function()
+    -- the original single-question fixture (steer.lua's first parse_question
+    -- test) must be entirely unaffected: same question/options, plus the new
+    -- fields explicitly absent/false.
+    local pane = table.concat({
+      "✻ Worked for 4s",
+      "❯ ask which color",
+      "────────────────────────────────",
+      " ☐ Color",
+      "Which color?",
+      "❯ 1. Red",
+      "     The color red",
+      "  2. Blue",
+      "     The color blue",
+      "  3. Type something.",
+      "  4. Chat about this",
+      "Enter to select · ↑/↓ to navigate · Esc to cancel",
+    }, "\n")
+    local q = steer.parse_question(pane)
+    assert(q, "must detect the picker")
+    assert(q.question == "Which color?" and #q.options == 4, "unchanged shape")
+    assert(q.multi_select == false, "single question is never multi_select")
+    assert(q.index == nil and q.total == nil, "no progress marker on a single question")
+  end,
+
   ["dispatch: launch_cmd runs the agent as a shell job (id, cwd, styling)"] = function()
     local cmd = dispatch.launch_cmd("giroux/app-ab12", "ab12cd34", "/Users/dev/Code/app", 'review the "thing"')
     assert(cmd:find("tmux new%-session %-d %-s 'giroux/app%-ab12'"))
