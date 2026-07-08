@@ -1,5 +1,7 @@
 local monitor = require("giroux.monitor")
 local sessions = require("giroux.sessions")
+local transcript = require("giroux.transcript")
+local stats = require("giroux.stats")
 require("giroux").setup({})
 
 -- monitor's live path is integration-tested headlessly (live_roster_test.lua);
@@ -53,5 +55,51 @@ return {
     assert(monitor.should_discover(1000, 997, 10) == false, "3s after a discovery: liveness only, no re-list")
     assert(monitor.should_discover(1000, 990, 10) == true, "10s elapsed: time to re-list")
     assert(monitor.should_discover(1000, 985, 10) == true, "past the interval: discover")
+  end,
+
+  ["monitor: replayed (non-live) question seeds silently, live one pages"] = function()
+    -- regression: an answered AskUserQuestion transiently re-enters ? during
+    -- seed-window replay (tool_use sets pending, a later tool_result clears
+    -- it). Only the FIRST replayed line was ever seeded silently under the
+    -- old guard, so a later non-live re-entry into ? must not be mistaken
+    -- for the first line to prove this is really fixed.
+    require("giroux").setup({ notify = { levels = { question = "notify" } } })
+    require("giroux.notify").reset()
+    local captured = {}
+    local orig = vim.notify
+    vim.notify = function(msg)
+      captured[#captured + 1] = msg
+    end
+
+    local tr = {
+      session = { node = "x", path = "/a/sess.jsonl", state = "·", mtime = os.time() },
+      acc = stats.new(),
+      parser = transcript.parser(),
+      question = false,
+    }
+
+    -- line 1 (replay, not a question): primes the tracker without seeding "?"
+    monitor._derive(tr, false)
+    assert(tr.session.state ~= "?", "sanity: first replayed line is not a question")
+
+    -- line N (replay, NOT the first line): pending-set gets an AskUserQuestion
+    -- that was already answered later in history. Must stay silent.
+    tr.question = true
+    monitor._derive(tr, false)
+    assert(tr.session.state == "?", "tracker should have entered ? state")
+    assert(#captured == 0, "non-first replayed line must not page: " .. vim.inspect(captured))
+
+    -- line N+1 (replay): the tool_result answers it, clearing the latch.
+    tr.question = false
+    monitor._derive(tr, false)
+    assert(#captured == 0, "clearing during replay must not page")
+
+    -- now watching live: a fresh question genuinely pages.
+    tr.question = true
+    monitor._derive(tr, true)
+    assert(#captured >= 1, "live transition must page")
+
+    vim.notify = orig
+    require("giroux.notify").reset()
   end,
 }

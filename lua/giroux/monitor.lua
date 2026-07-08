@@ -156,7 +156,11 @@ local function derive(tr, live)
   -- already true on first sight is seeded silently (counts on the badge, no
   -- banner) — only a transition that happens while we're watching pages.
   local notify = require("giroux.notify")
-  local seed = not tr.primed
+  -- seed silently for the whole pre-watch replay (live == false), not just the
+  -- first line: an answered AskUserQuestion re-enters ? during replay and would
+  -- otherwise page for a question already resolved. Only witnessed (live)
+  -- transitions call notify.fire.
+  local seed = not tr.primed or not live
   tr.primed = true
   local function signal(event, on, msg)
     if not on then
@@ -541,4 +545,5 @@ function M.stop()
 end
 
 M._state = state
+M._derive = derive
 return M
