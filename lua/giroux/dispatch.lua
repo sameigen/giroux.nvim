@@ -140,6 +140,20 @@ local function repo_label(it)
   return disp
 end
 
+---Parse the `find_repos` stdout ("<mtime>\t<repo>\n"...) into a repo list. Pure.
+---@param stdout string
+---@return {path: string, mtime: integer}[]
+function M._parse_repos(stdout)
+  local repos = {}
+  for line in vim.gsplit(vim.trim(stdout or ""), "\n", { trimempty = true }) do
+    local mtime, path = line:match("^(%d+)\t(.+)$")
+    if path then
+      repos[#repos + 1] = { path = path, mtime = tonumber(mtime) or 0 }
+    end
+  end
+  return repos
+end
+
 ---Find repos under a node's roots (per-node `roots`, else the global), newest
 ---first. One ssh round-trip; emits "<mtime>\t<repo>" so the picker can sort by
 ---recency and show an age. stat is portable (GNU -c, BSD -f); the while-read
@@ -159,17 +173,16 @@ local function find_repos(node_name, cb)
     .. ' m=$(stat -c %Y "$d" 2>/dev/null || stat -f %m "$d" 2>/dev/null);'
     .. ' printf \'%s\\t%s\\n\' "${m:-0}" "$d"; done | sort -rn'
   ssh.exec(node.host, cmd, function(ok, stdout)
-    local repos = {}
-    if ok then
-      for line in vim.gsplit(vim.trim(stdout), "\n", { trimempty = true }) do
-        local mtime, path = line:match("^(%d+)\t(.+)$")
-        if path then
-          repos[#repos + 1] = { path = path, mtime = tonumber(mtime) or 0 }
-        end
-      end
-    end
-    cb(repos)
+    cb(ok and M._parse_repos(stdout) or {})
   end)
+end
+
+---True when a captured pane is showing Claude's folder-trust dialog (the only
+---prompt dispatch auto-accepts — dispatching IS the trust decision). Pure.
+---@param pane string tmux capture-pane output
+---@return boolean
+function M._is_trust_prompt(pane)
+  return pane:find("trust this folder", 1, true) ~= nil or pane:find("Quick safety check", 1, true) ~= nil
 end
 
 ---Fresh directories (notably worktrees) hit Claude's folder-trust dialog
@@ -187,7 +200,7 @@ local function accept_trust(node_name, name)
       if not ok then
         return
       end
-      if stdout:find("trust this folder", 1, true) or stdout:find("Quick safety check", 1, true) then
+      if M._is_trust_prompt(stdout) then
         ssh.exec(node.host, ssh.login_wrap(("tmux send-keys -t %s Enter"):format(shq(name))), function() end)
       elseif tries < 5 then
         vim.defer_fn(poll, 2000)
@@ -195,6 +208,17 @@ local function accept_trust(node_name, name)
     end)
   end
   vim.defer_fn(poll, 2000)
+end
+
+---True when a discovered session `s` is the transcript a dispatch just created:
+---its parent dir matches the cwd slug AND it was born at/after the dispatch
+---(minus a 5s clock-skew grace). Pure.
+---@param s {path: string, birth: integer|nil}
+---@param slug string
+---@param since integer dispatch epoch seconds
+---@return boolean
+function M._is_dispatched_session(s, slug, since)
+  return vim.fs.basename(vim.fs.dirname(s.path)) == slug and (s.birth or 0) >= since - 5
 end
 
 ---Poll discovery for the transcript a fresh dispatch creates, then open its
@@ -210,7 +234,7 @@ local function follow_new_session(node_name, dir, since)
     tries = tries + 1
     require("giroux.sessions").list({ node = node_name }, function(list)
       for _, s in ipairs(list) do
-        if vim.fs.basename(vim.fs.dirname(s.path)) == slug and (s.birth or 0) >= since - 5 then
+        if M._is_dispatched_session(s, slug, since) then
           require("giroux.monitor").discover()
           require("giroux.feed").open_path({ node = node_name, path = s.path })
           return
