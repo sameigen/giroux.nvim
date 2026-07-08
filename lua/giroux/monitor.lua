@@ -152,6 +152,14 @@ local function derive(tr, live)
     tr.session.pending[#tr.session.pending + 1] = c.name
   end
 
+  -- subagents surface their state nested under the parent on the roster, but
+  -- don't page: a workflow fanning out 16 agents shouldn't fire 16 "finished"
+  -- banners. Attention rolls up to the parent session, which owns the signal.
+  if tr.session.is_subagent then
+    tr.primed = true
+    return
+  end
+
   -- fire/clear interrupt-worthy notifications on state ENTRY. A condition
   -- already true on first sight is seeded silently (counts on the badge, no
   -- banner) — only a transition that happens while we're watching pages.
@@ -298,6 +306,39 @@ local function drop_line_subs(k)
   state.line_subs[k] = nil
 end
 
+---Fill a subagent tracker's type/description from its `.meta.json` sidecar
+---(written at spawn time — the reliable source while the subagent is still
+---running, before any parent tool_result exists). One cat per subagent lifetime.
+---@param k string tracker key
+local function enrich_subagent(k)
+  local tr = state.trackers[k]
+  if not (tr and tr.session.is_subagent) then
+    return
+  end
+  local metapath = tr.session.path:gsub("%.jsonl$", ".meta.json")
+  local _, node = nodes.get(tr.session.node)
+  ssh.exec(node.host, ("cat %s 2>/dev/null"):format(ssh.shq(metapath)), function(ok, out)
+    local t = state.trackers[k]
+    if not (ok and t and out and out ~= "") then
+      return
+    end
+    local okj, meta = pcall(vim.json.decode, out)
+    if not (okj and type(meta) == "table") then
+      return
+    end
+    local function ne(s)
+      return (type(s) == "string" and s ~= "") and s or nil
+    end
+    t.session.agent_type = ne(meta.agentType)
+    t.session.description = ne(meta.description)
+    t.session.spawn_depth = tonumber(meta.spawnDepth)
+    if (not t.session.title or t.session.title == "") and t.session.description then
+      t.session.title = t.session.description
+    end
+    notify()
+  end)
+end
+
 local function reconcile(found, errored)
   errored = errored or {}
   local seen, dirty = {}, {}
@@ -309,6 +350,9 @@ local function reconcile(found, errored)
       derive(state.trackers[k]) -- age-based flips (●→✗, ○→~) without new bytes
     else
       start_tracker(s)
+      if s.is_subagent then
+        enrich_subagent(key(s.node, s.path))
+      end
       dirty[s.node] = true
     end
   end
