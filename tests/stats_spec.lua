@@ -15,7 +15,8 @@ local function events(records)
   return out
 end
 
-local function tool_use(id, name, input)
+local function tool_use(id, name, input, opts)
+  opts = opts or {}
   return {
     type = "assistant",
     uuid = "a" .. id,
@@ -23,11 +24,11 @@ local function tool_use(id, name, input)
     timestamp = "2026-06-11T05:00:00.000Z",
     message = {
       id = "m" .. id,
-      model = "claude-fable-5",
+      model = opts.model or "claude-fable-5",
       role = "assistant",
       content = { { type = "tool_use", id = id, name = name, input = input } },
       stop_reason = vim.NIL,
-      usage = {
+      usage = opts.usage or {
         input_tokens = 100,
         output_tokens = 50,
         cache_read_input_tokens = 900,
@@ -82,6 +83,62 @@ return {
     assert(sum.tokens.out == 250, "out=" .. sum.tokens.out)
     assert(sum.tokens.cache_read == 4500)
     assert(sum.tools.Edit == 2 and sum.tools.WebFetch == 1)
+  end,
+
+  ["stats: ctx_pct is a model-aware, rounded percentage that never crashes"] = function()
+    -- known family, exact round numbers so the rounding rule isn't ambiguous
+    assert(
+      stats.ctx_pct("claude-sonnet-4-5-20250929", 100000) == 50,
+      tostring(stats.ctx_pct("claude-sonnet-4-5-20250929", 100000))
+    )
+    -- unrecognized model id still gets the sane 200k default, never crashes
+    assert(stats.ctx_pct("some-future-model-nobody-has-seen", 50000) == 25)
+    -- a longer-context ("1m") variant gets the bigger window
+    assert(stats.ctx_pct("claude-sonnet-4-5-1m", 500000) == 50)
+    -- degrade to nil: no context observed, or a nonsensical negative count
+    assert(stats.ctx_pct("claude-fable-5", nil) == nil, "no usage yet -> nil")
+    assert(stats.ctx_pct("claude-fable-5", -5) == nil, "negative -> nil")
+    -- nil model still resolves to the default limit (never crashes on missing model)
+    assert(stats.ctx_pct(nil, 100000) == 50, "nil model -> default 200k limit")
+  end,
+
+  ["stats: summary tracks active model + context pressure off the LATEST usage event, not cumulative"] = function()
+    local evs = events({
+      tool_use("e1", "Edit", { file_path = "/a.rs" }, {
+        model = "claude-haiku-4",
+        usage = {
+          input_tokens = 1000,
+          output_tokens = 10,
+          cache_read_input_tokens = 0,
+          cache_creation_input_tokens = 0,
+        },
+      }),
+      tool_use("e2", "Edit", { file_path = "/b.rs" }, {
+        model = "claude-opus-4-5",
+        usage = {
+          input_tokens = 40000,
+          output_tokens = 20,
+          cache_read_input_tokens = 60000,
+          cache_creation_input_tokens = 0,
+        },
+      }),
+    })
+    local sum = stats.aggregate(evs):summary()
+    assert(sum.model == "claude-opus-4-5", "latest usage event's model wins: " .. tostring(sum.model))
+    assert(
+      sum.ctx_tokens == 100000,
+      "latest turn only (40000+60000), not cumulative across both calls: " .. tostring(sum.ctx_tokens)
+    )
+    assert(sum.ctx_limit == 200000, tostring(sum.ctx_limit))
+    assert(sum.ctx_pct == 50, "100000/200000 = 50%: " .. tostring(sum.ctx_pct))
+  end,
+
+  ["stats: model/ctx fields degrade to nil when no usage has been observed"] = function()
+    local sum = stats.aggregate({}):summary()
+    assert(sum.model == nil)
+    assert(sum.ctx_tokens == nil)
+    assert(sum.ctx_limit == nil)
+    assert(sum.ctx_pct == nil)
   end,
 
   ["stats: recent_line and recent_files"] = function()

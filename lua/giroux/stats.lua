@@ -85,6 +85,54 @@ function M.tool_target(e)
 end
 
 -- ---------------------------------------------------------------------------
+-- context-window pressure
+
+-- Best-effort model -> context-window (tokens) table. Order matters: matched
+-- top-to-bottom on a lower-cased model id, first hit wins, so a more specific
+-- marker (e.g. a long-context "1m" variant) must precede the generic family
+-- match it would otherwise also satisfy. Unknown/missing model -> the default.
+-- Never authoritative — Anthropic can change limits without notice; this is a
+-- pressure *estimate* for the roster/statsheet, not a hard budget.
+local DEFAULT_CONTEXT_LIMIT = 200000
+local CONTEXT_LIMITS = {
+  { pat = "1m", limit = 1000000 }, -- long-context beta variants, e.g. "...-1m"
+  { pat = "opus", limit = 200000 },
+  { pat = "sonnet", limit = 200000 },
+  { pat = "haiku", limit = 200000 },
+}
+
+---Context-window size (tokens) to judge pressure against for a model id.
+---Falls back to DEFAULT_CONTEXT_LIMIT for nil/unrecognized models — never nil.
+---@param model string|nil
+---@return integer
+function M._context_limit(model)
+  local low = (model or ""):lower()
+  for _, e in ipairs(CONTEXT_LIMITS) do
+    if low:find(e.pat, 1, true) then
+      return e.limit
+    end
+  end
+  return DEFAULT_CONTEXT_LIMIT
+end
+
+---Context-window pressure: `context_tokens` as a percentage of the model's
+---context limit, rounded to the nearest integer. Pure, best-effort, never
+---crashes — nil/negative tokens (nothing observed yet) degrade to nil.
+---@param model string|nil
+---@param context_tokens integer|nil
+---@return integer|nil
+function M.ctx_pct(model, context_tokens)
+  if not context_tokens or context_tokens < 0 then
+    return nil
+  end
+  local limit = M._context_limit(model)
+  if not limit or limit <= 0 then
+    return nil
+  end
+  return math.floor((100 * context_tokens / limit) + 0.5)
+end
+
+-- ---------------------------------------------------------------------------
 -- accumulator
 
 ---@class giroux.stats.Acc
@@ -95,6 +143,8 @@ end
 ---@field tools table<string, integer> tool name -> count
 ---@field tokens {out: integer, cache_read: integer, cache_creation: integer, input: integer}
 ---@field models table<string, boolean>
+---@field latest_model string|nil model id off the most recent usage event (active model)
+---@field latest_context integer|nil most recent turn's context size: input+cache_read+cache_creation
 ---@field subagents table[] {agent_id, agent_type, status, stats}
 ---@field recent_files string[] last touched paths, newest last
 ---@field private calls table<string, table> open tool_call inputs by id
@@ -110,6 +160,8 @@ function M.new()
     tools = {},
     tokens = { out = 0, cache_read = 0, cache_creation = 0, input = 0 },
     models = {},
+    latest_model = nil,
+    latest_context = nil,
     subagents = {},
     recent_files = {},
     calls = {},
@@ -175,7 +227,13 @@ function Acc:add(e)
     self.tokens.cache_creation = self.tokens.cache_creation + (e.cache_creation or 0)
     if e.model then
       self.models[e.model] = true
+      self.latest_model = e.model
     end
+    -- context-window pressure tracks the LATEST turn only (not cumulative):
+    -- input + cache_read + cache_creation on one usage record IS that turn's
+    -- total context size, per Anthropic's usage accounting. Events arrive in
+    -- transcript order, so the last one processed is the most recent turn.
+    self.latest_context = (e.input or 0) + (e.cache_read or 0) + (e.cache_creation or 0)
   elseif e.kind == "subagent" then
     self.subagents[#self.subagents + 1] = {
       agent_id = e.agent_id,
@@ -209,7 +267,7 @@ function Acc:recent_line()
   return table.concat(parts, " ")
 end
 
----@return {written: table, read: table, web: string[], tokens: table, tools: table, subagents: table[], recent_files: string[]}
+---@return {written: table, read: table, web: string[], tokens: table, tools: table, subagents: table[], recent_files: string[], model: string|nil, ctx_tokens: integer|nil, ctx_limit: integer|nil, ctx_pct: integer|nil}
 function Acc:summary()
   return {
     written = self.written,
@@ -221,6 +279,10 @@ function Acc:summary()
     models = vim.tbl_keys(self.models),
     subagents = self.subagents,
     recent_files = self.recent_files,
+    model = self.latest_model,
+    ctx_tokens = self.latest_context,
+    ctx_limit = self.latest_context and M._context_limit(self.latest_model) or nil,
+    ctx_pct = M.ctx_pct(self.latest_model, self.latest_context),
   }
 end
 
