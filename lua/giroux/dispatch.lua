@@ -279,38 +279,43 @@ end
 ---@param repo string
 ---@param headless boolean|nil
 local function maybe_worktree(node_name, repo, headless)
-  vim.ui.select({ "run in the repo", "fresh worktree" }, { prompt = "where should the agent work?" }, function(choice)
-    if not choice then
-      return
-    end
-    if choice == "run in the repo" then
-      return launch_in(node_name, repo, headless)
-    end
-    vim.ui.input({ prompt = "branch name: ", default = "agent/" }, function(branch)
-      if not branch or vim.trim(branch) == "" then
+  require("giroux.pick").open({
+    items = { "run in the repo", "fresh worktree" },
+    title = "where should the agent work?",
+    format = tostring,
+    on_choice = function(choice)
+      if not choice then
         return
       end
-      local _, node = nodes.get(node_name)
-      local cfg = require("giroux").config
-      local wt = ("%s/%s--%s"):format(cfg.dispatch.worktree_dir, vim.fs.basename(repo), branch:gsub("[^%w_-]", "-"))
-      local cmd = ("mkdir -p %s && git -C %s worktree add -b %s %s"):format(
-        shq_path(vim.fs.dirname(wt)),
-        shq_path(repo),
-        shq(branch),
-        shq_path(wt)
-      )
-      ssh.exec(node.host, cmd, function(ok, out, stderr)
-        if not ok then
-          return vim.notify("giroux: worktree failed: " .. vim.trim(stderr or ""), vim.log.levels.ERROR)
+      if choice == "run in the repo" then
+        return launch_in(node_name, repo, headless)
+      end
+      vim.ui.input({ prompt = "branch name: ", default = "agent/" }, function(branch)
+        if not branch or vim.trim(branch) == "" then
+          return
         end
-        -- worktree paths carry a leading ~ until the remote shell expands it;
-        -- launch needs a real path, so resolve it for slug/correlation.
-        ssh.exec(node.host, ("cd %s && pwd"):format(shq_path(wt)), function(ok2, pwd)
-          launch_in(node_name, ok2 and vim.trim(pwd) or wt, headless)
+        local _, node = nodes.get(node_name)
+        local cfg = require("giroux").config
+        local wt = ("%s/%s--%s"):format(cfg.dispatch.worktree_dir, vim.fs.basename(repo), branch:gsub("[^%w_-]", "-"))
+        local cmd = ("mkdir -p %s && git -C %s worktree add -b %s %s"):format(
+          shq_path(vim.fs.dirname(wt)),
+          shq_path(repo),
+          shq(branch),
+          shq_path(wt)
+        )
+        ssh.exec(node.host, cmd, function(ok, out, stderr)
+          if not ok then
+            return vim.notify("giroux: worktree failed: " .. vim.trim(stderr or ""), vim.log.levels.ERROR)
+          end
+          -- worktree paths carry a leading ~ until the remote shell expands it;
+          -- launch needs a real path, so resolve it for slug/correlation.
+          ssh.exec(node.host, ("cd %s && pwd"):format(shq_path(wt)), function(ok2, pwd)
+            launch_in(node_name, ok2 and vim.trim(pwd) or wt, headless)
+          end)
         end)
       end)
-    end)
-  end)
+    end,
+  })
 end
 
 ---Build the tmux command to resume an existing claude session by id.
@@ -409,27 +414,33 @@ function M.clean(opts)
         vim.notify(("giroux: nothing idle to reap on %s"):format(node_name))
         return
       end
-      local labels = vim.tbl_map(function(r)
-        return ("%s (idle %dm)"):format(r.name, math.floor(r.idle / 60))
-      end, reapable)
-      vim.ui.select({ "kill all " .. #reapable .. " idle", unpack(labels) }, {
-        prompt = "reap on " .. node_name .. ":",
-      }, function(choice, idx)
-        if not choice then
-          return
-        end
-        local targets = idx == 1 and reapable or { reapable[idx - 1] }
-        for _, r in ipairs(targets) do
-          ssh.exec(
-            node.host,
-            ssh.login_wrap(("tmux kill-session -t %s 2>/dev/null"):format(shq(r.name))),
-            function() end
-          )
-        end
-        tmuxctl.invalidate(node_name)
-        vim.notify(("giroux: reaped %d session(s) on %s"):format(#targets, node_name))
-        require("giroux.monitor").discover()
-      end)
+      local pick_items = { { all = true, label = "kill all " .. #reapable .. " idle" } }
+      for _, r in ipairs(reapable) do
+        pick_items[#pick_items + 1] = { r = r, label = ("%s (idle %dm)"):format(r.name, math.floor(r.idle / 60)) }
+      end
+      require("giroux.pick").open({
+        items = pick_items,
+        title = "reap on " .. node_name,
+        format = function(it)
+          return it.label
+        end,
+        on_choice = function(choice)
+          if not choice then
+            return
+          end
+          local targets = choice.all and reapable or { choice.r }
+          for _, r in ipairs(targets) do
+            ssh.exec(
+              node.host,
+              ssh.login_wrap(("tmux kill-session -t %s 2>/dev/null"):format(shq(r.name))),
+              function() end
+            )
+          end
+          tmuxctl.invalidate(node_name)
+          vim.notify(("giroux: reaped %d session(s) on %s"):format(#targets, node_name))
+          require("giroux.monitor").discover()
+        end,
+      })
     end)
   end
 end
@@ -465,11 +476,16 @@ function M.open(opts)
   if #names == 1 then
     return with_node(names[1])
   end
-  vim.ui.select(names, { prompt = "dispatch on node:" }, function(node_name)
-    if node_name then
-      with_node(node_name)
-    end
-  end)
+  require("giroux.pick").open({
+    items = names,
+    title = "dispatch on node",
+    format = tostring,
+    on_choice = function(node_name)
+      if node_name then
+        with_node(node_name)
+      end
+    end,
+  })
 end
 
 return M

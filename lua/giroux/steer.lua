@@ -178,21 +178,25 @@ function M.answer(it, digit)
 end
 
 ---Answer-pick entry: read the live question off the pane and let the user
----pick an option (vim.ui.select), then send the digit.
+---pick an option (the built-in picker), then send the digit.
 ---@param it giroux.Session
 function M.pick(it)
   M.read_question(it, function(q)
     if not q then
       return vim.notify("giroux: no live question on this session's screen", vim.log.levels.WARN)
     end
-    local labels = vim.tbl_map(function(o)
-      return ("%d. %s"):format(o.n, o.label)
-    end, q.options)
-    vim.ui.select(labels, { prompt = q.question }, function(_, idx)
-      if idx then
-        M.answer(it, q.options[idx].n)
-      end
-    end)
+    require("giroux.pick").open({
+      items = q.options,
+      title = q.question,
+      format = function(o)
+        return ("%d. %s"):format(o.n, o.label)
+      end,
+      on_choice = function(o)
+        if o then
+          M.answer(it, o.n)
+        end
+      end,
+    })
   end)
 end
 
