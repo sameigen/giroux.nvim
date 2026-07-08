@@ -514,7 +514,7 @@ function M.open(arg)
   map(km.help, function()
     vim.notify(
       "⏎ feed / fold · ^S regroup · n dispatch · a attach · s steer · R resume · S stats · Q digest · r refresh · q close"
-        .. "  ·  ▸ = steerable, blank = observe-only  ·  ✓ = done (finished, unreviewed)",
+        .. "  ·  ▸ = steerable, blank = observe-only  ·  ⤷ = subagent  ·  ✓ = done (finished, unreviewed)",
       vim.log.levels.INFO
     )
   end, "help")

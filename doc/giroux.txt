@@ -223,6 +223,7 @@ Defaults (abbreviated): >lua
     live_interval = 3,        -- liveness poll: process truth + needs-you + tmux title spinner
     discover_interval = 10,
     active_window = 240,      -- minutes of mtime considered "live"
+    subagents = true,         -- surface spawned subagents nested under their parent
     dispatch = {
       cmd = { "claude" },
       flags = { "--dangerously-skip-permissions" },
