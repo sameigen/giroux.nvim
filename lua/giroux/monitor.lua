@@ -8,6 +8,7 @@ local nodes = require("giroux.nodes")
 local transcript = require("giroux.transcript")
 local stats = require("giroux.stats")
 local sessions = require("giroux.sessions")
+local vocab = require("giroux.state")
 
 local M = {}
 
@@ -36,9 +37,8 @@ local function key(node, path)
   return node .. "\0" .. path
 end
 
--- ✓ = done/unseen (a finished turn you haven't reviewed) ranks just under
--- working and above plain idle, so "ready to review" floats up the roster.
-local ORDER = { ["?"] = 1, ["✗"] = 2, ["●"] = 3, ["✓"] = 4, ["○"] = 5, ["~"] = 6, ["·"] = 7 }
+-- Attention order/labels are single-sourced in giroux.state.
+local ORDER = vocab.ORDER
 
 ---Lift a quiet state (○/~) to working (●) when a FRESH tmux title shows a live
 ---spinner. The title is ground truth that the agent is generating — instant,

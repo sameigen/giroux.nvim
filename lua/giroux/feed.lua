@@ -9,6 +9,7 @@
 local transcript = require("giroux.transcript")
 local ssh = require("giroux.ssh")
 local nodes = require("giroux.nodes")
+local vocab = require("giroux.state")
 
 local M = {}
 
@@ -53,12 +54,16 @@ M.clean_window = clean_window
 
 local SPIN = { "|", "/", "-", "\\" }
 
+-- Labels source from giroux.state, except two deliberate feed-only overrides:
+-- "?" reads "QUESTION" (an alert banner, louder than the roster's "needs
+-- you"), and "·" reads "connecting" (the feed's own stream handshake, not
+-- the roster's "starting" — a session vs. a socket).
 local STATE = {
-  ["●"] = { label = "working", hl = "GirouxStateWorking" },
+  ["●"] = { label = vocab.LABEL["●"], hl = "GirouxStateWorking" },
   ["?"] = { label = "QUESTION", hl = "GirouxStateQuestion" },
-  ["✓"] = { label = "done", hl = "GirouxStateDone" },
-  ["○"] = { label = "idle", hl = "GirouxStateIdle" },
-  ["✗"] = { label = "dead", hl = "GirouxStateDead" },
+  ["✓"] = { label = vocab.LABEL["✓"], hl = "GirouxStateDone" },
+  ["○"] = { label = vocab.LABEL["○"], hl = "GirouxStateIdle" },
+  ["✗"] = { label = vocab.LABEL["✗"], hl = "GirouxStateDead" },
   ["·"] = { label = "connecting", hl = "GirouxStateIdle" },
 }
 

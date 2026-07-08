@@ -6,6 +6,7 @@
 --- grouping (the choice persists across runs); `Enter` on a group header folds it.
 
 local monitor = require("giroux.monitor")
+local vocab = require("giroux.state")
 
 local M = {}
 
@@ -13,18 +14,9 @@ local GROUPINGS = { "machine", "repo", "state" }
 
 local state = { buf = nil, items = {}, rows = {}, unsub = nil, group_by = nil, collapsed = {} }
 
--- ✓ = done/unseen (finished, not yet reviewed) — see monitor.derive. It ranks
--- below working and above idle so "ready to review" floats up.
-local ORDER = { ["?"] = 1, ["✗"] = 2, ["●"] = 3, ["✓"] = 4, ["○"] = 5, ["~"] = 6, ["·"] = 7 }
-local STATE_NAMES = {
-  ["?"] = "needs you",
-  ["●"] = "working",
-  ["✓"] = "done",
-  ["○"] = "idle",
-  ["✗"] = "dead",
-  ["~"] = "stale",
-  ["·"] = "starting",
-}
+-- Attention order/labels are single-sourced in giroux.state.
+local ORDER = vocab.ORDER
+local STATE_NAMES = vocab.LABEL
 
 -- The grouping choice persists across runs (matches Anthropic's Agent View).
 local function persist_path()
