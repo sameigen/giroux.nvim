@@ -329,4 +329,95 @@ return {
     assert(vim.deep_equal(kinds(whole), kinds(chunked)), "chunking must not change events")
     assert(vim.deep_equal(whole, chunked))
   end,
+
+  ["events: AskUserQuestion carries the full multi-question array, un-flattened"] = function()
+    local p = transcript.parser()
+    local q = {
+      questions = {
+        {
+          question = "which deploy target?",
+          header = "Target",
+          multiSelect = false,
+          options = { { label = "staging", description = "safe" }, { label = "prod", description = "risky" } },
+        },
+        {
+          question = "which regions?",
+          header = "Regions",
+          multiSelect = true,
+          options = { { label = "us-east", description = "" }, { label = "eu-west", description = "" } },
+        },
+      },
+    }
+    local evs =
+      p:feed(J(assistant_rec({ { type = "tool_use", id = "toolu_q2", name = "AskUserQuestion", input = q } })))
+    assert(evs[1].kind == "question")
+    assert(#evs[1].questions == 2, "array must not collapse to one question, got " .. #evs[1].questions)
+    assert(
+      evs[1].questions[1].multiSelect == false and evs[1].questions[2].multiSelect == true,
+      "each question keeps its own multiSelect"
+    )
+    assert(evs[1].questions[1].header == "Target" and evs[1].questions[2].header == "Regions")
+    assert(evs[1].questions[2].options[1].label == "us-east")
+  end,
+
+  ["events: queue-operation preserves `op` for both enqueue and non-enqueue values"] = function()
+    local p = transcript.parser()
+    local evs = {}
+    vim.list_extend(
+      evs,
+      p:feed(
+        J({ type = "queue-operation", operation = "enqueue", sessionId = "s1", timestamp = "t1", content = "run lint" })
+      )
+    )
+    -- exact non-enqueue operation string is unverified against a real census; this
+    -- proves generic pass-through, not a specific value (see plan notes).
+    vim.list_extend(
+      evs,
+      p:feed(
+        J({ type = "queue-operation", operation = "dequeue", sessionId = "s1", timestamp = "t2", content = "run lint" })
+      )
+    )
+    assert(evs[1].kind == "queue" and evs[1].op == "enqueue", "op must be captured, got " .. tostring(evs[1].op))
+    assert(
+      evs[2].kind == "queue" and evs[2].op == "dequeue",
+      "non-enqueue op must pass through untouched, got " .. tostring(evs[2].op)
+    )
+  end,
+
+  ['events: literal "fallback" content block classifies other, never unknown'] = function()
+    local p = transcript.parser()
+    local evs = p:feed(J(assistant_rec({ { type = "fallback", text = "unsupported block" } })))
+    assert(evs[1].kind == "other", "fallback block must degrade to other, got " .. evs[1].kind)
+    assert(evs[1].rtype == "assistant" and evs[1].subtype == "fallback")
+  end,
+
+  ["events: scheduled_task_fire and stop_hook_summary system subtypes classify other, never unknown"] = function()
+    local p = transcript.parser()
+    local evs = {}
+    vim.list_extend(
+      evs,
+      p:feed(J({
+        type = "system",
+        subtype = "scheduled_task_fire",
+        sessionId = "s1",
+        timestamp = "t",
+        content = "woke on schedule",
+      }))
+    )
+    vim.list_extend(
+      evs,
+      p:feed(J({
+        type = "system",
+        subtype = "stop_hook_summary",
+        sessionId = "s1",
+        timestamp = "t",
+        content = "stop hook ran",
+      }))
+    )
+    for _, e in ipairs(evs) do
+      assert(e.kind == "other", "new system subtype must never be unknown, got " .. e.kind)
+      assert(e.rtype == "system")
+    end
+    assert(evs[1].subtype == "scheduled_task_fire" and evs[2].subtype == "stop_hook_summary")
+  end,
 }
