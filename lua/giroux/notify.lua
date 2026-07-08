@@ -9,6 +9,17 @@ local M = {}
 local fired = {} ---@type table<string, boolean> dedupe key -> true
 local badge = { question = 0, dead = 0, tripwire = 0, end_of_turn = 0 }
 
+-- Emission sink — overridable in tests so specs capture instead of paging.
+-- Defaults preserve production behavior exactly.
+M._sink = {
+  notify = function(msg, level)
+    vim.notify(msg, level)
+  end,
+  osascript = function(argv)
+    pcall(vim.system, argv)
+  end,
+}
+
 ---The statusline badge, e.g. "  2  ✓3  ✗1". Empty when nothing is waiting.
 ---Put `%{v:lua.require'giroux.notify'.statusline()}` in your statusline.
 ---@return string
@@ -46,9 +57,9 @@ local function osascript(msg, title)
   -- default channel for question/dead is "macos" — would otherwise blow up the
   -- monitor's derive() on the first ✗/? on Linux.
   if vim.fn.executable("osascript") ~= 1 then
-    return vim.notify("giroux: " .. msg, vim.log.levels.INFO)
+    return M._sink.notify("giroux: " .. msg, vim.log.levels.INFO)
   end
-  pcall(vim.system, {
+  M._sink.osascript({
     "osascript",
     "-e",
     ('display notification %q with title %q sound name "Glass"'):format(msg, title or "giroux"),
@@ -71,7 +82,7 @@ function M.fire(event, session, msg)
   if ch == "macos" then
     osascript(msg, "giroux · " .. (session.title or session.project or ""))
   elseif ch == "notify" then
-    vim.notify("giroux: " .. msg, event == "dead" and vim.log.levels.WARN or vim.log.levels.INFO)
+    M._sink.notify("giroux: " .. msg, event == "dead" and vim.log.levels.WARN or vim.log.levels.INFO)
   end
   -- "statusline" and any value: the badge is already bumped above
   vim.cmd.redrawstatus()

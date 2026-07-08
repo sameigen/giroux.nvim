@@ -102,4 +102,39 @@ return {
     vim.notify = orig
     require("giroux.notify").reset()
   end,
+
+  ["monitor: a pane-confirmed question promotes to ? only within the freshness window"] = function()
+    -- the override lives in monitor.derive: a live pane question (AskUserQuestion
+    -- never hits the transcript while pending) promotes an otherwise-idle
+    -- session to "?" — but only while the file is recent enough that the
+    -- question can't be stale-answered. Drive the real derive, not a copy of
+    -- its rule (that's what broke: the old test re-coded `age <= 1800` locally).
+    require("giroux.notify").reset()
+    local function tr_with(path, age, question)
+      return {
+        session = { node = "x", path = path, state = "·", mtime = os.time() - age },
+        acc = stats.new(),
+        parser = transcript.parser(),
+        question = question,
+      }
+    end
+
+    -- fresh (age well within 1800s): pane question promotes to "?"
+    local fresh = tr_with("/a/fresh.jsonl", 10, true)
+    monitor._derive(fresh, false)
+    assert(fresh.session.state == "?", "fresh pane question must promote to ?: " .. fresh.session.state)
+
+    -- stale (age well past 1800s): question no longer trusted; derive falls
+    -- through to the age-based heuristic instead of "?"
+    local stale = tr_with("/a/stale.jsonl", 5000, true)
+    monitor._derive(stale, false)
+    assert(stale.session.state ~= "?", "stale pane question must not promote to ?: " .. stale.session.state)
+
+    -- no pane question: state is whatever derive would give anyway
+    local none = tr_with("/a/none.jsonl", 10, false)
+    monitor._derive(none, false)
+    assert(none.session.state ~= "?", "no pane question: no promotion: " .. none.session.state)
+
+    require("giroux.notify").reset()
+  end,
 }
