@@ -1,30 +1,33 @@
 local notify = require("giroux.notify")
 
 return {
-  ["notify: macos channel with no osascript routes the message to vim.notify"] = function()
+  ["notify: macos channel routes through the sink on every platform"] = function()
     -- regression: default channel for question/dead is "macos"; on a Linux node
     -- vim.system{"osascript"} raises ENOENT and used to crash monitor.derive().
+    -- Both branches must land in the sink — banner argv where osascript exists,
+    -- vim.notify degradation where it doesn't — and neither may raise.
     require("giroux").setup({ notify = { levels = { dead = "macos" } } })
     notify.reset()
-    local seen = {}
+    local seen, osa = {}, {}
     local orig = notify._sink
     notify._sink = {
       notify = function(msg)
         seen[#seen + 1] = msg
       end,
-      osascript = function()
-        error("osascript must not fire when absent")
+      osascript = function(argv)
+        osa[#osa + 1] = argv
       end,
     }
-    -- if the host HAS osascript, this test still proves fire() doesn't raise and
-    -- routes *somewhere* via the sink; the capture makes the assertion real.
     local ok = pcall(notify.fire, "dead", { path = "/x", title = "X" }, "went dark")
     notify._sink = orig
     notify.reset()
     assert(ok, "fire must not raise")
-    -- on a host without osascript, the degraded path captured the message:
-    if vim.fn.executable("osascript") ~= 1 then
-      assert(vim.tbl_contains(seen, "giroux: went dark"), "message routed to the sink, no real banner")
+    if vim.fn.executable("osascript") == 1 then
+      assert(#osa == 1 and #seen == 0, "banner argv routed to the osascript sink only")
+      assert(osa[1][1] == "osascript", "argv is an osascript invocation")
+    else
+      assert(vim.tbl_contains(seen, "giroux: went dark"), "message degraded to the notify sink")
+      assert(#osa == 0, "no osascript spawn attempted")
     end
   end,
 
