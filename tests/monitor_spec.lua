@@ -137,4 +137,40 @@ return {
 
     require("giroux.notify").reset()
   end,
+
+  ["monitor: a subagent is never shown dead — a silent one returned, not hung"] = function()
+    -- an open turn gone silent past the dead threshold derives ✗ for a normal
+    -- session; a subagent has no interactive process to hang, so it settles to
+    -- idle instead (a finished subagent whose transcript didn't close its turn
+    -- cleanly must not read as "went dark with work pending").
+    require("giroux.notify").reset()
+    local function tr_open_turn(is_sub)
+      local tr = {
+        session = {
+          node = "x",
+          path = "/a/-p/P/subagents/agent-z.jsonl",
+          state = "·",
+          mtime = os.time() - 4000, -- well past the 1800s dead threshold
+          is_subagent = is_sub or nil,
+        },
+        acc = stats.new(),
+        parser = transcript.parser(),
+      }
+      -- a user message opens a turn that never closes → in_turn = true
+      tr.parser:feed(
+        vim.json.encode({ type = "user", uuid = "u", message = { role = "user", content = "go" } }) .. "\n"
+      )
+      return tr
+    end
+    local normal = tr_open_turn(false)
+    monitor._derive(normal, false)
+    assert(normal.session.state == "✗", "a normal session silent with an open turn is dead: " .. normal.session.state)
+
+    local sub = tr_open_turn(true)
+    monitor._derive(sub, false)
+    assert(sub.session.state ~= "✗", "a subagent is never dead: " .. sub.session.state)
+    assert(sub.session.state == "○", "a silent subagent settles to idle: " .. sub.session.state)
+
+    require("giroux.notify").reset()
+  end,
 }

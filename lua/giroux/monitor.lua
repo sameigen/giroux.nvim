@@ -13,6 +13,12 @@ local vocab = require("giroux.state")
 local M = {}
 
 local SEED = 32768 -- bytes of tail re-read on first sight to recover pending-set
+-- subagents are bounded (one task) and usually already finished when first seen,
+-- so a full parse from a clean record boundary is affordable and gives the
+-- correct terminal state — a 32KB tail can start mid-turn and misread a done
+-- agent, and (unlike a live session) no appends ever arrive to fix it. Cap it so
+-- a pathologically huge subagent still falls back to the tail window.
+local SUBAGENT_FULL_SEED = 4 * 1024 * 1024
 
 local state = {
   trackers = {}, ---@type table<string, table>
@@ -120,6 +126,13 @@ local function derive(tr, live)
   -- but only while the file is recent enough that it can't be stale-answered.
   if tr.question and age <= 1800 then
     st = "?"
+  end
+  -- a subagent runs inside its parent and has no interactive process to hang: a
+  -- silent one has returned its result, not gone dark with work pending. Never
+  -- show it as dead (a completed subagent whose transcript didn't close its turn
+  -- cleanly would otherwise read as ✗). It settles to idle instead.
+  if tr.session.is_subagent and st == "✗" then
+    st = "○"
   end
   -- done / unseen: a turn that just finished (working → idle) and hasn't been
   -- reviewed is "done" (✓) — ready to look at — and ranks above plain idle.
@@ -287,12 +300,18 @@ local function start_tracker(s)
   if state.trackers[k] then
     return
   end
-  local from = math.max(0, s.size - SEED)
+  local from
+  if s.is_subagent and s.size <= SUBAGENT_FULL_SEED then
+    from = 0 -- clean full parse: accurate terminal state for a finished subagent
+  else
+    from = math.max(0, s.size - SEED)
+  end
   state.trackers[k] = {
     session = vim.tbl_extend("force", s, { state = "·", pending = {}, activity = "" }),
     acc = stats.new(),
     parser = transcript.parser({ start_offset = from }),
-    skip_partial = s.size > SEED,
+    -- a mid-file start (from > 0) begins inside a record; drop that fragment.
+    skip_partial = from > 0,
     -- bytes up to here are pre-watch history (the seed window we replay); only
     -- appends beyond it are "live" and may latch a (✓) done/unseen finish.
     live_after = s.size,
