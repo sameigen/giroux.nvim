@@ -20,6 +20,14 @@ jobs:
           version: latest
           args: --check lua/ tests/
 
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@stable
+      - run: cargo install selene
+      - run: selene lua/ tests/
+
   typecheck:
     runs-on: ubuntu-latest
     steps:
