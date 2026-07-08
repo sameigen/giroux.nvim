@@ -84,11 +84,11 @@ touch `AskUserQuestion` but on different files and different data sources
 
 | Plan | Title | Wave | Status |
 |------|-------|------|--------|
-| 01 | Parser: queue event, new subtypes, block fallback, question array | 1 | TODO |
-| 02 | `todos.lua`: fold Task* events into a live todo model | 1 | TODO |
-| 03 | `stats.lua`: context-window pressure + active model | 1 | TODO |
-| 04 | `feed.lua`: render the modern tool vocabulary + multi-question | 1 | TODO |
-| 05 | `steer.lua`: answer multi-question + multiSelect prompts | 1 | TODO |
-| 06 | Surface todos/queued/context/mode on the roster | 2 | TODO |
+| 01 | Parser: queue event, new subtypes, block fallback, question array | 1 | DONE (regression-proof: parser already handled it; +2 fixtures, +4 tests) |
+| 02 | `todos.lua`: fold Task* events into a live todo model | 1 | DONE (new pure module; summary `{total,done,in_progress,pending,current}`) |
+| 03 | `stats.lua`: context-window pressure + active model | 1 | DONE (summary gains `model`, `ctx_pct`, `ctx_tokens`, `ctx_limit`) |
+| 04 | `feed.lua`: render the modern tool vocabulary + multi-question | 1 | DONE (11 tool families + folded multi-question answers) |
+| 05 | `steer.lua`: answer multi-question + multiSelect prompts | 1 | DONE (parse side tested; multiSelect/multi-question SEND path best-effort, needs live-pane confirmation) |
+| 06 | Surface todos/queued/context/mode on the roster | 2 | IN PROGRESS |
 
 Status values: TODO | IN PROGRESS | DONE | BLOCKED (reason).
