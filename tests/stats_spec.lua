@@ -95,6 +95,12 @@ return {
     assert(stats.ctx_pct("some-future-model-nobody-has-seen", 50000) == 25)
     -- a longer-context ("1m") variant gets the bigger window
     assert(stats.ctx_pct("claude-sonnet-4-5-1m", 500000) == 50)
+    -- observed context ABOVE the assumed limit = a larger-context beta whose id
+    -- didn't reveal it (real case: opus-4-8 at 496k on the 1M beta). Raise to 1M
+    -- rather than report a nonsensical >100%.
+    assert(stats.ctx_pct("claude-opus-4-8", 496261) == 50, tostring(stats.ctx_pct("claude-opus-4-8", 496261)))
+    -- final backstop: even an absurd count never exceeds 100%
+    assert(stats.ctx_pct("claude-opus-4-8", 5000000) == 100, "clamped at 100")
     -- degrade to nil: no context observed, or a nonsensical negative count
     assert(stats.ctx_pct("claude-fable-5", nil) == nil, "no usage yet -> nil")
     assert(stats.ctx_pct("claude-fable-5", -5) == nil, "negative -> nil")

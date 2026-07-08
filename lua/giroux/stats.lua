@@ -129,7 +129,14 @@ function M.ctx_pct(model, context_tokens)
   if not limit or limit <= 0 then
     return nil
   end
-  return math.floor((100 * context_tokens / limit) + 0.5)
+  -- Observed context above the assumed limit means the session is on a
+  -- larger-context variant than the model id revealed (e.g. opus/sonnet on the
+  -- 1M beta — the model id is still "…opus-4-8"). Raise to the 1M tier so the %
+  -- stays meaningful instead of exceeding 100. Clamp as a final backstop.
+  if context_tokens > limit and limit < 1000000 then
+    limit = 1000000
+  end
+  return math.min(100, math.floor((100 * context_tokens / limit) + 0.5))
 end
 
 -- ---------------------------------------------------------------------------
