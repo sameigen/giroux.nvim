@@ -25,6 +25,12 @@ M.TAIL_BYTES = 32768
 ---@field project string display form of the project slug
 ---@field activity string recent tool activity (tail-derived, e.g. "edit×3 bash×1")
 ---@field touched string|nil most recent file path touched
+---@field is_subagent boolean|nil this transcript is a spawned subagent (Agent/Task)
+---@field parent_id string|nil session id of the parent that spawned it
+---@field agent_id string|nil the subagent's own id (from its filename)
+---@field agent_type string|nil subagent type, e.g. "general-purpose" (from .meta.json)
+---@field description string|nil the task the subagent was dispatched with (.meta.json)
+---@field spawn_depth integer|nil nesting depth (1 = spawned by the top-level session)
 
 ---State proof from parser pending-set + turn-in-flight + transcript age
 ---(DESIGN.md §4). WORKING is proven by either an unresolved tool_use OR an
@@ -52,9 +58,26 @@ function M.derive_state(pending, age_sec, in_turn)
   return age_sec <= 3600 and "○" or "~"
 end
 
+---Split a subagent transcript path into its parent id + own agent id, or nil
+---for a normal (top-level) session. Subagents live at
+---`<project>/<parentSid>/subagents/agent-<agentId>.jsonl`. Pure.
+---@param path string
+---@return {parent_id: string, agent_id: string}|nil
+function M.subagent_of(path)
+  local agent_id = path:match("/subagents/agent%-([^/]+)%.jsonl$")
+  if not agent_id then
+    return nil
+  end
+  local parent_dir = path:gsub("/subagents/agent%-[^/]+%.jsonl$", "")
+  return { parent_id = vim.fs.basename(parent_dir), agent_id = agent_id }
+end
+
 ---"-Users-dev-Code-app" -> "~/Code/app" (lossy on dashed names; display only).
 ---Strips the home prefix on macOS (-Users-<user>-) and Linux (-home-<user>-).
 function M.project_display(path)
+  -- a subagent lives one level deeper (<project>/<sid>/subagents/agent-*.jsonl);
+  -- collapse to the parent's path so the project slug resolves to the same repo.
+  path = path:gsub("/subagents/agent%-[^/]+%.jsonl$", ".jsonl")
   local slug = vim.fs.basename(vim.fs.dirname(path))
   local user = slug:match("^%-Users%-([^%-]+)") or slug:match("^%-home%-([^%-]+)")
   if user then
@@ -138,23 +161,28 @@ function M.list(opts, cb)
   local cfg = require("giroux").config
   local all = nodes.all()
   local out, errored, waiting = {}, {}, 0
+  -- subagents (Agent/Task transcripts) are surfaced by default so they nest
+  -- under their parent on the roster; the `subagents = false` knob restores the
+  -- old parent-only scan. Either way `journal.jsonl` and the workflows/ tree
+  -- (JS scripts + JSON journals, not transcripts) are excluded.
+  local sub_gate = cfg.subagents == false and "-not -path '*/subagents/*' " or ""
   for name, node in pairs(all) do
     if not opts.node or opts.node == name then
       waiting = waiting + 1
       -- portable stat: GNU (-c, Linux) with a BSD (-f, macOS) fallback. The GNU
       -- form fails on macOS (no -c) and is silently skipped; vice-versa on Linux.
       local cmd = (
-        "find %s -name '*.jsonl' -not -path '*/subagents/*' -not -name journal.jsonl -mmin -%d 2>/dev/null"
+        "find %s -name '*.jsonl' -not -name journal.jsonl -not -path '*/workflows/*' %s-mmin -%d 2>/dev/null"
         .. " | while IFS= read -r f; do stat -c '%%Y %%s %%W %%n' \"$f\" 2>/dev/null"
         .. " || stat -f '%%m %%z %%B %%N' \"$f\"; done"
-      ):format(node.claude_projects, cfg.active_window)
+      ):format(node.claude_projects, sub_gate, cfg.active_window)
       ssh.exec(node.host, cmd, function(ok, stdout)
         waiting = waiting - 1
         if ok then
           for line in vim.gsplit(stdout, "\n", { trimempty = true }) do
             local mtime, size, birth, path = line:match("^(%d+) (%d+) (%d+) (.+)$")
             if path then
-              out[#out + 1] = {
+              local item = {
                 node = name,
                 path = path,
                 mtime = tonumber(mtime),
@@ -162,6 +190,13 @@ function M.list(opts, cb)
                 birth = tonumber(birth),
                 project = M.project_display(path),
               }
+              local sub = M.subagent_of(path)
+              if sub then
+                item.is_subagent = true
+                item.parent_id = sub.parent_id
+                item.agent_id = sub.agent_id
+              end
+              out[#out + 1] = item
             end
           end
         else

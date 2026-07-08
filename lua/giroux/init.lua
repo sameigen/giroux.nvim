@@ -29,6 +29,7 @@
 ---@field live_interval integer seconds between liveness polls (process truth + needs-you + tmux title spinner) between the heavier file-listing discoveries
 ---@field discover_interval integer seconds between full discovery passes (file listing); live tails + liveness polls fill the gaps
 ---@field active_window integer minutes of transcript mtime considered "live" when scanning
+---@field subagents boolean surface spawned subagents (Agent/Task) nested under their parent on the roster (default true)
 ---@field backfill integer events rendered when opening a feed (history above is parsed, not drawn)
 ---@field initial_tail integer bytes read from a session's tail on feed open (state proof is local to recent bytes)
 ---@field dispatch giroux.DispatchConfig
@@ -49,6 +50,7 @@ M.defaults = {
   live_interval = 3,
   discover_interval = 10,
   active_window = 240,
+  subagents = true,
   backfill = 4000,
   initial_tail = 1048576,
   dispatch = {
