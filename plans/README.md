@@ -28,18 +28,18 @@ Commit convention: terse, lowercase, module-prefixed, **no AI trailers**
 
 | Plan | Title | Priority | Effort | Depends on | Status |
 |------|-------|----------|--------|------------|--------|
-| 001 | Silence seed-replay notifications | P1 | S | — | TODO |
-| 002 | Shell-quote transport paths (injection) | P1 | S | — | TODO |
-| 003 | Wire (or remove) headless `:GirouxDispatch!` | P1 | S | — | TODO |
-| 004 | Fix `attach` closing the wrong tab | P2 | S | — | TODO |
-| 005 | Harden stat-sheet/QA remote read + open | P2 | S | 002 (soft) | TODO |
-| 006 | Characterize dispatch orchestration | P2 | M | 003 (soft) | TODO |
-| 007 | Test hygiene: stub notify sink, test real derive | P2 | S | 001 (soft) | TODO |
-| 008 | Sync stale docs (kill-0, Linux, health, counts) | P2 | S | — | TODO |
-| 009 | Single-source state vocab; drop dead keymaps | P3 | S | — | TODO |
-| 010 | Real CLAUDE.md + CI Lua linter | P3 | S | — | TODO |
-| 011 | Transcript fixture corpus + gauntlet in CI | P3 | M | — | TODO |
-| 012 | Finish the `pick.lua` migration | P3 | S | 003, 006 (soft) | TODO |
+| 001 | Silence seed-replay notifications | P1 | S | — | DONE (2026-07-08; test hardened beyond plan — literal snippet couldn't fail) |
+| 002 | Shell-quote transport paths (injection) | P1 | S | — | DONE (2026-07-08) |
+| 003 | Wire (or remove) headless `:GirouxDispatch!` | P1 | S | — | DONE (2026-07-08; wired, not descoped) |
+| 004 | Fix `attach` closing the wrong tab | P2 | S | — | DONE (2026-07-08; extracted `steer._close_own_tab`) |
+| 005 | Harden stat-sheet/QA remote read + open | P2 | S | 002 (soft) | DONE (2026-07-08; BufWipeout stop mirrored into qa too) |
+| 006 | Characterize dispatch orchestration | P2 | M | 003 (soft) | DONE (2026-07-08; no bugs surfaced by characterization) |
+| 007 | Test hygiene: stub notify sink, test real derive | P2 | S | 001 (soft) | DONE (2026-07-08; reused 001's `_derive` seam) |
+| 008 | Sync stale docs (kill-0, Linux, health, counts) | P2 | S | — | DONE (2026-07-08; ran last so spec count [106] is final; also fixed a 2nd macOS-only claim + stale CI job list) |
+| 009 | Single-source state vocab; drop dead keymaps | P3 | S | — | DONE (2026-07-08; `·`="starting" per roster, feed keeps QUESTION/connecting literals) |
+| 010 | Real CLAUDE.md + CI Lua linter | P3 | S | — | DONE (2026-07-08; cargo-install selene — action tag v1 doesn't resolve; CI run is first lint gate) |
+| 011 | Transcript fixture corpus + gauntlet in CI | P3 | M | — | DONE (2026-07-08; 7 fixtures, all 20 event kinds, gauntlet green in CI) |
+| 012 | Finish the `pick.lua` migration | P3 | S | 003, 006 (soft) | DONE (2026-07-08; zero `vim.ui.select` calls remain) |
 
 Status values: TODO | IN PROGRESS | DONE | BLOCKED (one-line reason) | REJECTED
 (one-line rationale).
