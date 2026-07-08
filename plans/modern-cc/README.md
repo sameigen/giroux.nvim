@@ -89,6 +89,6 @@ touch `AskUserQuestion` but on different files and different data sources
 | 03 | `stats.lua`: context-window pressure + active model | 1 | DONE (summary gains `model`, `ctx_pct`, `ctx_tokens`, `ctx_limit`) |
 | 04 | `feed.lua`: render the modern tool vocabulary + multi-question | 1 | DONE (11 tool families + folded multi-question answers) |
 | 05 | `steer.lua`: answer multi-question + multiSelect prompts | 1 | DONE (parse side tested; multiSelect/multi-question SEND path best-effort, needs live-pane confirmation) |
-| 06 | Surface todos/queued/context/mode on the roster | 2 | IN PROGRESS |
+| 06 | Surface todos/queued/context/mode on the roster | 2 | DONE (149 tests; verified live; ctx% capped for 1M-context models, todos hidden when empty) |
 
 Status values: TODO | IN PROGRESS | DONE | BLOCKED (reason).
