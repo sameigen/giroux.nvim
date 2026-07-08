@@ -242,6 +242,19 @@ function M.attach_keymaps()
   }
 end
 
+---Close the attach terminal's own window(s) and return to the board. Close by
+---window handle — do NOT convert a tabpage handle to a tab number (they
+---diverge as tabs are opened/closed elsewhere); nvim_win_close on the
+---terminal's last window drops its tab too. Exposed for tests.
+---@param buf integer
+function M._close_own_tab(buf)
+  for _, win in ipairs(vim.fn.win_findbuf(buf)) do
+    if vim.api.nvim_win_is_valid(win) and #vim.api.nvim_list_tabpages() > 1 then
+      pcall(vim.api.nvim_win_close, win, true)
+    end
+  end
+end
+
 ---Attach the real TUI in a terminal tab. Esc belongs to the agent; C-z suspends
 ---claude to a shell (do work, `fg` to resume); C-q → nvim normal mode (scroll +
 ---copy, i resumes); C-b d detaches.
@@ -267,13 +280,7 @@ function M.attach(it)
       term = true,
       on_exit = function()
         vim.schedule(function()
-          -- detach/exit: close this terminal's tab and return to the board
-          for _, win in ipairs(vim.fn.win_findbuf(buf)) do
-            local tab = vim.api.nvim_win_get_tabpage(win)
-            if #vim.api.nvim_list_tabpages() > 1 then
-              pcall(vim.cmd, tab .. "tabclose")
-            end
-          end
+          M._close_own_tab(buf)
         end)
       end,
     })

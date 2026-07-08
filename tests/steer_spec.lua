@@ -15,6 +15,25 @@ return {
     assert(vim.base64.decode(b64) == "line one\nline 'two' with quotes\n$HOME stays literal")
   end,
 
+  ["steer: attach cleanup closes its own tab even after tab reordering"] = function()
+    -- reproduce the handle-vs-position hazard: open extra tabs so a tabpage
+    -- HANDLE no longer equals its 1-based POSITION, then close the target
+    -- window by handle and confirm only that tab went away.
+    vim.cmd("tabnew")
+    vim.cmd("tabnew")
+    vim.cmd("tabnew")
+    vim.cmd("tabnew") -- this is the "attach" tab
+    local buf = vim.api.nvim_get_current_buf()
+    local before = #vim.api.nvim_list_tabpages()
+    steer._close_own_tab(buf)
+    assert(#vim.api.nvim_list_tabpages() == before - 1, "exactly one tab closed")
+    assert(not vim.api.nvim_buf_is_loaded(buf) or #vim.fn.win_findbuf(buf) == 0, "the attach buffer's window is gone")
+    -- clean up remaining scratch tabs so we don't leak into other specs
+    while #vim.api.nvim_list_tabpages() > 1 do
+      vim.cmd("tabclose")
+    end
+  end,
+
   ["steer: attach lets C-z through to suspend claude (now a shell job)"] = function()
     local km = {}
     for _, m in ipairs(steer.attach_keymaps()) do
