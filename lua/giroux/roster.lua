@@ -66,6 +66,30 @@ local function trunc(s, n)
   return vim.fn.strcharpart(s, 0, n - 1) .. "…"
 end
 
+-- Cap subagents shown under one parent so a wide fan-out (a workflow spawning
+-- many agents) can't flood the board; the overflow is summarized in one row.
+-- Children are attention-sorted first, so ✗/? never hide behind the cap.
+local SUBAGENT_CAP = 12
+
+---Session id from a transcript path (<slug>/<sessionId>.jsonl).
+local function sid_of(path)
+  return (vim.fs.basename(path):gsub("%.jsonl$", ""))
+end
+
+---The name shown in a session's title column. Falls back off a missing
+---ai-title to the opening prompt, then to a short session id — never the raw
+---UUID basename (a titleless session used to read as opaque hex noise).
+---@param it giroux.Session
+local function display_title(it)
+  if it.title and it.title ~= "" then
+    return it.title
+  end
+  if it.last_prompt and it.last_prompt ~= "" then
+    return it.last_prompt
+  end
+  return sid_of(it.path):sub(1, 8)
+end
+
 ---@param it giroux.Session
 local function repo_of(it)
   return vim.fs.basename(it.project or it.path or "") or "?"
@@ -110,10 +134,28 @@ function M._line(it, hide)
   if hide ~= "project" then
     cols[#cols + 1] = trunc(it.project, 22)
   end
-  cols[#cols + 1] = trunc(it.title or vim.fs.basename(it.path), 34)
+  cols[#cols + 1] = trunc(display_title(it), 34)
   cols[#cols + 1] = ("%4s"):format(age_str(it.mtime))
   cols[#cols + 1] = trunc(info, 44)
   return "  " .. table.concat(cols, " ")
+end
+
+---A subagent row, nested under its parent session: ⤷ marker, state glyph,
+---agent type, and the task it was dispatched with.
+---@param it giroux.Session
+function M._subline(it)
+  local typ = it.agent_type or "agent"
+  local desc = it.title or it.description or it.last_prompt
+  if not desc or desc == "" then
+    desc = it.agent_id and ("agent-" .. it.agent_id:sub(1, 8)) or "subagent"
+  end
+  local cols = {
+    it.state .. " ",
+    trunc(typ, 15),
+    trunc(desc, 38),
+    ("%4s"):format(age_str(it.mtime)),
+  }
+  return "     ⤷ " .. table.concat(cols, " ")
 end
 
 local function by_attention(a, b)
@@ -138,6 +180,32 @@ function M.build(items, group_by, collapsed)
     rows[#lines] = row
   end
 
+  -- Partition into top-level sessions (parents) and subagents. A subagent nests
+  -- under its parent by (node, parent session id); an orphan whose parent isn't
+  -- in the active window is promoted to a top-level row so it's never lost.
+  local parents, index, children = {}, {}, {}
+  for _, it in ipairs(items) do
+    if not it.is_subagent then
+      parents[#parents + 1] = it
+      index[it.node .. "\0" .. sid_of(it.path)] = it
+    end
+  end
+  for _, it in ipairs(items) do
+    if it.is_subagent then
+      local pk = it.node .. "\0" .. (it.parent_id or "")
+      if index[pk] then
+        children[pk] = children[pk] or {}
+        table.insert(children[pk], it)
+      else
+        parents[#parents + 1] = it
+        index[it.node .. "\0" .. sid_of(it.path)] = it
+      end
+    end
+  end
+  local function kids(it)
+    return children[it.node .. "\0" .. sid_of(it.path)]
+  end
+
   local needs, done = 0, 0
   for _, it in ipairs(items) do
     if it.state == "?" then
@@ -148,8 +216,8 @@ function M.build(items, group_by, collapsed)
   end
   emit(
     ("giroux · %d session%s · needs you: %d%s · by %s · %s"):format(
-      #items,
-      #items == 1 and "" or "s",
+      #parents,
+      #parents == 1 and "" or "s",
       needs,
       done > 0 and (" · done: " .. done) or "",
       group_by,
@@ -159,9 +227,9 @@ function M.build(items, group_by, collapsed)
   )
   emit("", { kind = "blank" })
 
-  -- bucket, then sort within each bucket attention-first
+  -- bucket parents, then sort within each bucket attention-first
   local groups, order = {}, {}
-  for _, it in ipairs(items) do
+  for _, it in ipairs(parents) do
     local k = group_key(it, group_by)
     if not groups[k] then
       groups[k] = {}
@@ -172,12 +240,30 @@ function M.build(items, group_by, collapsed)
   for _, k in ipairs(order) do
     table.sort(groups[k], by_attention)
   end
-  -- order groups by their most-urgent member (groups[k][1] after the sort), then name
+
+  -- a group's lead glyph + rank consider its parents AND their subagents, so an
+  -- asking/dead subagent floats its group up and shows on the folded header.
+  local function group_lead(k)
+    local rank, glyph = 9, groups[k][1] and groups[k][1].state or "·"
+    local function consider(s)
+      local r = ORDER[s.state] or 9
+      if r < rank then
+        rank, glyph = r, s.state
+      end
+    end
+    for _, it in ipairs(groups[k]) do
+      consider(it)
+      for _, c in ipairs(kids(it) or {}) do
+        consider(c)
+      end
+    end
+    return glyph, rank
+  end
   table.sort(order, function(a, b)
-    local ua = ORDER[groups[a][1].state] or 9
-    local ub = ORDER[groups[b][1].state] or 9
-    if ua ~= ub then
-      return ua < ub
+    local _, ra = group_lead(a)
+    local _, rb = group_lead(b)
+    if ra ~= rb then
+      return ra < rb
     end
     return a < b
   end)
@@ -185,14 +271,22 @@ function M.build(items, group_by, collapsed)
   local hide = (group_by == "machine" and "node") or (group_by == "repo" and "project") or nil
   for _, k in ipairs(order) do
     local g = groups[k]
+    -- header counts fold in subagents so the badge reflects everything the group
+    -- holds (a needs-you/dead subagent counts even when the group is collapsed).
     local q, dead, done_n = 0, 0, 0
-    for _, it in ipairs(g) do
+    local function tally(it)
       if it.state == "?" then
         q = q + 1
       elseif it.state == "✗" then
         dead = dead + 1
       elseif it.state == "✓" then
         done_n = done_n + 1
+      end
+    end
+    for _, it in ipairs(g) do
+      tally(it)
+      for _, c in ipairs(kids(it) or {}) do
+        tally(c)
       end
     end
     local badge = (q > 0 and ("  ?%d"):format(q) or "")
@@ -202,9 +296,7 @@ function M.build(items, group_by, collapsed)
     -- also fold a machine named "loper" after a Ctrl+S regroup.
     local ckey = group_by .. "\0" .. k
     local folded = collapsed[ckey] == true
-    -- rollup glyph: the group's most-urgent member (g[1] after the attention
-    -- sort) leads the header, so a *folded* group still telegraphs its state.
-    local lead = g[1].state
+    local lead = group_lead(k)
     emit(
       ("%s %s %s (%d)%s"):format(folded and "▸" or "▾", lead, k, #g, badge),
       { kind = "header", group = k, ckey = ckey }
@@ -212,6 +304,17 @@ function M.build(items, group_by, collapsed)
     if not folded then
       for _, it in ipairs(g) do
         emit(M._line(it, hide), { kind = "item", item = it })
+        local cs = kids(it)
+        if cs then
+          table.sort(cs, by_attention)
+          for i, c in ipairs(cs) do
+            if i > SUBAGENT_CAP then
+              emit(("       ⤷ …+%d more"):format(#cs - SUBAGENT_CAP), { kind = "more" })
+              break
+            end
+            emit(M._subline(c), { kind = "item", item = c })
+          end
+        end
       end
     end
   end
@@ -252,6 +355,18 @@ end
 local function item_at_cursor()
   local r = row_at_cursor()
   return r and r.kind == "item" and r.item or nil
+end
+
+-- Steering acts on a live tmux session; a subagent has none (it runs inside its
+-- parent). Gate the steering verbs so they explain rather than fail silently.
+-- Feed/stats/digest still work on a subagent — those just read its transcript.
+local function steerable_at_cursor(verb)
+  local it = item_at_cursor()
+  if it and it.is_subagent then
+    vim.notify("giroux: subagents are observe-only — can't " .. verb, vim.log.levels.INFO)
+    return nil
+  end
+  return it
 end
 
 function M.refresh()
@@ -374,19 +489,19 @@ function M.open(arg)
     require("giroux.dispatch").open({})
   end, "dispatch a new agent")
   map(km.attach, function()
-    local it = item_at_cursor()
+    local it = steerable_at_cursor("attach")
     if it then
       require("giroux.steer").attach(it)
     end
   end, "attach (tmux)")
   map(km.steer, function()
-    local it = item_at_cursor()
+    local it = steerable_at_cursor("steer")
     if it then
       require("giroux.steer").buffer(it)
     end
   end, "steer (compose + send)")
   map(km.resume, function()
-    local it = item_at_cursor()
+    local it = steerable_at_cursor("resume")
     if it then
       require("giroux.dispatch").resume(it.node, it)
     end
