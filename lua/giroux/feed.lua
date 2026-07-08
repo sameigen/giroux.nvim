@@ -107,6 +107,51 @@ local function epoch(ts)
   return os.time({ year = y, month = mo, day = d, hour = h, min = mi, sec = math.floor(s) }) + (s % 1)
 end
 
+---Head for a TaskUpdate call. `input` only ever carries {taskId, status} or
+---{taskId, description} (a description-only edit, no status key — a real
+---variant, see this plan's "Current state"); the human-readable subject only
+---appears in the RESULT (toolUseResult = {task = {id, subject}}). Shows the
+---subject once known, the bare taskId until then.
+---@param input table tool_use input
+---@param detail table|nil toolUseResult (nil before the result lands)
+---@return string
+function M._task_update_head(input, detail)
+  local subject = type(detail) == "table" and type(detail.task) == "table" and detail.task.subject
+  local who = subject or input.taskId or "?"
+  return ("▸ %-5s %s: %s"):format("todo", input.status or "edit", who)
+end
+
+---Extract `meta.name` from a Workflow script — a JS module that opens
+---`export const meta = { name: '...', ... }` (verified real shape). Falls
+---back to the script's first line when the pattern isn't found (an
+---older/unknown script shape) rather than showing nothing.
+---@param script string|nil
+---@return string
+function M._workflow_name(script)
+  if not script or script == "" then
+    return "?"
+  end
+  local name = script:match("meta%s*=%s*{%s*name%s*:%s*['\"](.-)['\"]")
+  return name or first_line(script)
+end
+
+---Split "mcp__<server>__<tool>" into server/tool. The server segment may
+---itself contain underscores/hyphens (real examples:
+---"mcp__plugin_cloudflare_cloudflare-docs__search_cloudflare_documentation",
+---"mcp__claude_ai_Google_Drive__authenticate") — split on the FIRST "__"
+---after the "mcp__" prefix, which is always the true server/tool boundary
+---in every real name observed. nil, nil when the name doesn't match (feeds
+---the generic fallback).
+---@param name string
+---@return string|nil server, string|nil tool
+function M._mcp_parts(name)
+  local rest = name:match("^mcp__(.+)$")
+  if not rest then
+    return nil, nil
+  end
+  return rest:match("^(.-)__(.+)$")
+end
+
 ---Head line for a tool_call event. Returns head, body.
 ---@return string head, string[] body
 function M._call_head(e)
@@ -129,6 +174,41 @@ function M._call_head(e)
     return fmt("web", "search: " .. (input.query or "?")), {}
   elseif e.name == "Agent" or e.name == "Task" then
     return fmt("agent", input.description or input.subagent_type or "?"), lines_of(input.prompt)
+  elseif e.name == "TaskCreate" then
+    return fmt("todo", "+ " .. (input.subject or "?")), lines_of(input.description or "")
+  elseif e.name == "TaskUpdate" then
+    return M._task_update_head(input, nil), lines_of(input.description or "")
+  elseif e.name == "TaskStop" then
+    -- NB: real field is task_id (snake_case), unlike TaskUpdate's taskId
+    return fmt("todo", "stop " .. (input.task_id or "?")), {}
+  elseif e.name == "ToolSearch" then
+    return fmt("search", input.query or "?"), { "max_results: " .. tostring(input.max_results or "?") }
+  elseif e.name == "Workflow" then
+    return fmt("workflow", M._workflow_name(input.script)), lines_of(input.script or "")
+  elseif e.name == "ScheduleWakeup" then
+    return fmt(
+      "wake",
+      ("in %ss — %s"):format(tostring(input.delaySeconds or "?"), first_line(input.reason or input.prompt or "?"))
+    ),
+      lines_of(input.prompt or "")
+  elseif e.name == "SendMessage" then
+    return fmt("→", (input.to or "?") .. ": " .. first_line(input.summary or "?")), lines_of(input.message or "")
+  elseif e.name == "Skill" then
+    return fmt("skill", input.skill or "?"),
+      lines_of(type(input.args) == "string" and input.args or vim.inspect(input.args))
+  elseif e.name == "Monitor" then
+    -- `until` is a Lua reserved word: input.until is a SYNTAX ERROR, must index with a string key
+    return fmt("watch", first_line(input["until"] or "?")),
+      { "timeout: " .. tostring(input.timeoutSeconds or "?") .. "s" }
+  elseif e.name == "StructuredOutput" then
+    local keys = vim.tbl_keys(input)
+    table.sort(keys)
+    return fmt("output", table.concat(keys, ", ")), lines_of(vim.inspect(input))
+  elseif e.name:match("^mcp__") then
+    local server, tool = M._mcp_parts(e.name)
+    if server then
+      return fmt("mcp", server .. "/" .. tool), lines_of(vim.inspect(input))
+    end
   end
   local keys = vim.tbl_keys(input)
   table.sort(keys)
@@ -194,16 +274,75 @@ function M._result_body(call, e)
   return body
 end
 
+---Normalize a question event's `questions` array. Defends the hypothetical
+---old/alternate single-question shape (a bare {question, options} pair at
+---the top level of the event, e.g. e.question/e.options instead of a
+---one-element e.questions array) in case an upstream parser change (or a
+---not-yet-seen record) ever produces it — the current parser
+---(transcript.lua:263-268) always sets `questions` as an array, so this
+---branch is not reachable today, only a forward guard.
 ---@param e giroux.transcript.Event question event
-function M._question_lines(e)
-  local out = { "" }
-  for _, q in ipairs(e.questions or {}) do
+---@return table[] questions
+function M._question_list(e)
+  if type(e.questions) == "table" and #e.questions > 0 then
+    return e.questions
+  end
+  if e.question then
+    return { { question = e.question, options = e.options or {} } }
+  end
+  return {}
+end
+
+---One-liner fold head for a question call: the question count (when >1)
+---plus the first question's text.
+---@param questions table[]
+---@return string
+function M._question_head(questions)
+  local first = questions[1] and (questions[1].question or "?") or "?"
+  if #questions > 1 then
+    return ("▸ %-5s (%d) %s"):format("ask", #questions, first)
+  end
+  return ("▸ %-5s %s"):format("ask", first)
+end
+
+---Fold body for a question call: each question with its numbered options,
+---and — once resolved — the chosen option inline. `answers`, when present,
+---maps question text -> chosen label (the real toolUseResult shape; see
+---this plan's "Current state" and tests/events_spec.lua:93-116). Pass nil
+---for the initial (unresolved-echo) render.
+---@param questions table[]
+---@param answers table<string, string>|nil
+---@return string[]
+function M._question_lines(questions, answers)
+  local out = {}
+  for _, q in ipairs(questions) do
     out[#out + 1] = "? " .. (q.question or "?")
     for i, opt in ipairs(q.options or {}) do
       out[#out + 1] = ("    %d. %s — %s"):format(i, opt.label or "?", opt.description or "")
     end
+    local a = answers and q.question and answers[q.question]
+    if a then
+      out[#out + 1] = "    → chosen: " .. tostring(a)
+    end
   end
   return out
+end
+
+---Fold-head suffix for an answered question's tool_result: "answered" when
+---the structured answers map is present, else the raw result text (defends
+---an unexpected/old toolUseResult shape) — always shows something, never
+---silently drops the result the way the pre-fold rendering did.
+---@param e giroux.transcript.Event tool_result event
+---@return string
+function M._question_suffix(e)
+  local d = e.detail
+  if type(d) == "table" and type(d.answers) == "table" and next(d.answers) then
+    return "  answered"
+  end
+  if e.text and e.text ~= "" then
+    return "  " .. first_line(e.text)
+  end
+  return "  answered"
 end
 
 -- ---------------------------------------------------------------------------
@@ -366,23 +505,35 @@ local function apply_event(feed, e)
     local head, body = M._call_head(e)
     local mark = append_fold(feed, head, body)
     if e.id then
-      feed.calls[e.id] = { mark = mark, head = head, body = body, name = e.name, ts = e.ts }
+      feed.calls[e.id] = { mark = mark, head = head, body = body, name = e.name, ts = e.ts, input = e.input }
     end
     feed.state = "●"
   elseif e.kind == "question" then
-    append(feed, M._question_lines(e))
+    local qs = M._question_list(e)
+    local head = M._question_head(qs)
+    local mark = append_fold(feed, head, M._question_lines(qs))
     if e.id then
-      feed.calls[e.id] = { mark = nil, head = "?", body = {}, name = "AskUserQuestion", ts = e.ts }
+      feed.calls[e.id] = { mark = mark, head = head, name = "AskUserQuestion", ts = e.ts, questions = qs }
     end
     feed.state = "?"
   elseif e.kind == "tool_result" then
     local call = e.id and feed.calls[e.id]
     if call and call.mark then
       local fold = feed.folds[call.mark]
-      if fold and not fold.expanded then
-        fold.body = M._result_body(call, e)
+      if call.name == "AskUserQuestion" then
+        local d = e.detail
+        local answers = type(d) == "table" and type(d.answers) == "table" and d.answers or nil
+        if fold and not fold.expanded then
+          fold.body = M._question_lines(call.questions or {}, answers)
+        end
+        set_fold_head(feed, call.mark, call.head .. M._question_suffix(e))
+      else
+        local head = call.name == "TaskUpdate" and M._task_update_head(call.input or {}, e.detail) or call.head
+        if fold and not fold.expanded then
+          fold.body = M._result_body(call, e)
+        end
+        set_fold_head(feed, call.mark, head .. M._result_suffix(call, e))
       end
-      set_fold_head(feed, call.mark, call.head .. M._result_suffix(call, e))
     end
     -- subagent drill-in target
     if call and type(e.detail) == "table" and e.detail.agentId then

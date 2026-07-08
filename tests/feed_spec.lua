@@ -57,6 +57,100 @@ local function buf_text(bufnr)
   return table.concat(vim.api.nvim_buf_get_lines(bufnr, 0, -1, false), "\n")
 end
 
+-- modern-tool session fixture: a TaskCreate call and a two-question
+-- AskUserQuestion, both answered (census-shaped, no secrets).
+local function modern_fixture_lines()
+  return {
+    J({ type = "mode", mode = "normal", sessionId = "s2" }),
+    J({
+      type = "assistant",
+      uuid = "m1",
+      sessionId = "s2",
+      timestamp = "2026-07-08T14:00:00.000Z",
+      message = {
+        id = "msg_m1",
+        model = "claude-fable-5",
+        role = "assistant",
+        content = {
+          {
+            type = "tool_use",
+            id = "toolu_tc",
+            name = "TaskCreate",
+            input = { subject = "Ship the thing", description = "details" },
+          },
+          {
+            type = "tool_use",
+            id = "toolu_ask",
+            name = "AskUserQuestion",
+            input = {
+              questions = {
+                {
+                  question = "which deploy target?",
+                  header = "Target",
+                  multiSelect = false,
+                  options = {
+                    { label = "staging", description = "safe rollout" },
+                    { label = "prod", description = "risky rollout" },
+                  },
+                },
+                {
+                  question = "which regions?",
+                  header = "Regions",
+                  multiSelect = true,
+                  options = {
+                    { label = "us-east", description = "primary" },
+                    { label = "eu-west", description = "secondary" },
+                  },
+                },
+              },
+            },
+          },
+        },
+        stop_reason = vim.NIL,
+      },
+    }),
+    J({
+      type = "user",
+      uuid = "m2",
+      sessionId = "s2",
+      timestamp = "2026-07-08T14:00:01.000Z",
+      message = {
+        role = "user",
+        content = { { type = "tool_result", tool_use_id = "toolu_tc", content = "task created", is_error = false } },
+      },
+      toolUseResult = { task = { id = "1", subject = "Ship the thing" } },
+    }),
+    J({
+      type = "user",
+      uuid = "m3",
+      sessionId = "s2",
+      timestamp = "2026-07-08T14:00:02.000Z",
+      message = {
+        role = "user",
+        content = {
+          {
+            type = "tool_result",
+            tool_use_id = "toolu_ask",
+            content = 'Your questions have been answered: "which deploy target?"="staging", "which regions?"="us-east, eu-west"',
+            is_error = false,
+          },
+        },
+      },
+      toolUseResult = {
+        answers = { ["which deploy target?"] = "staging", ["which regions?"] = "us-east, eu-west" },
+      },
+    }),
+    J({
+      type = "system",
+      subtype = "turn_duration",
+      uuid = "td2",
+      sessionId = "s2",
+      durationMs = 2000,
+      messageCount = 3,
+    }),
+  }
+end
+
 return {
   ["feed: call heads render per-tool glyphs"] = function()
     local head, body = feed._call_head({ name = "Bash", input = { command = "cargo test --workspace\nmore" } })
@@ -85,17 +179,120 @@ return {
     assert(s:find("+2 -1", 1, true), s)
   end,
 
-  ["feed: question renders options as picker lines"] = function()
-    local lines = feed._question_lines({
-      questions = {
-        {
-          question = "Which way?",
-          options = { { label = "tmux", description = "send-keys" }, { label = "sdk", description = "stream-json" } },
-        },
+  ["feed: question fold lines render options, and the chosen answer once resolved"] = function()
+    local qs = {
+      {
+        question = "Which way?",
+        options = { { label = "tmux", description = "send-keys" }, { label = "sdk", description = "stream-json" } },
       },
+    }
+    local lines = feed._question_lines(qs, nil)
+    assert(lines[1] == "? Which way?", lines[1])
+    assert(lines[2]:find("1. tmux — send%-keys"), lines[2])
+    assert(#lines == 3, "no chosen line before an answer lands: " .. #lines)
+
+    lines = feed._question_lines(qs, { ["Which way?"] = "tmux" })
+    assert(lines[#lines] == "    → chosen: tmux", lines[#lines])
+  end,
+
+  ["feed: modern tool call heads — todo panel, search, workflow, wake, message, skill, watch, mcp"] = function()
+    local head =
+      feed._call_head({ name = "TaskCreate", input = { subject = "Ship the thing", description = "details" } })
+    assert(head == "▸ todo  + Ship the thing", head)
+
+    head = feed._call_head({ name = "TaskUpdate", input = { taskId = "10", status = "in_progress" } })
+    assert(head == "▸ todo  in_progress: 10", head) -- no subject yet: falls back to taskId
+
+    head = feed._call_head({
+      name = "TaskUpdate",
+      input = { taskId = "10", description = "new description, no status key" },
     })
-    assert(lines[2] == "? Which way?", lines[2])
-    assert(lines[3]:find("1. tmux — send%-keys"), lines[3])
+    assert(head == "▸ todo  edit: 10", head) -- real variant: description-only update, no status
+
+    head = feed._call_head({ name = "TaskStop", input = { task_id = "abc123" } }) -- NB: snake_case in real data
+    assert(head == "▸ todo  stop abc123", head)
+
+    head = feed._call_head({ name = "ToolSearch", input = { query = "select:WebFetch", max_results = 3 } })
+    assert(head == "▸ search select:WebFetch", head)
+
+    head = feed._call_head({
+      name = "Workflow",
+      input = { script = "export const meta = {\n  name: 'ship-it',\n  description: 'x'\n}" },
+    })
+    assert(head == "▸ workflow ship-it", head)
+
+    head = feed._call_head({ name = "ScheduleWakeup", input = { delaySeconds = 1500, reason = "heartbeat" } })
+    assert(head:find("▸ wake  in 1500s — heartbeat", 1, true), head)
+
+    head = feed._call_head({ name = "SendMessage", input = { to = "agent-42", summary = "REVISE: fix the thing" } })
+    assert(head == "▸ →   agent-42: REVISE: fix the thing", head)
+
+    head = feed._call_head({ name = "Skill", input = { skill = "plannotator-annotate", args = "docs/x.md" } })
+    assert(head == "▸ skill plannotator-annotate", head)
+
+    head =
+      feed._call_head({ name = "Monitor", input = { ["until"] = "background workflow done", timeoutSeconds = "1500" } })
+    assert(head:find("▸ watch background workflow done", 1, true), head)
+
+    head = feed._call_head({ name = "mcp__chrome-devtools__evaluate_script", input = { script = "1+1" } })
+    assert(head == "▸ mcp   chrome-devtools/evaluate_script", head)
+
+    -- real multi-underscore server segment (verified real tool name)
+    head = feed._call_head({
+      name = "mcp__plugin_cloudflare_cloudflare-docs__search_cloudflare_documentation",
+      input = { query = "x" },
+    })
+    assert(head == "▸ mcp   plugin_cloudflare_cloudflare-docs/search_cloudflare_documentation", head)
+
+    -- unknown tool still falls back to the generic vim.inspect renderer, unaffected
+    head = feed._call_head({ name = "SomeFutureTool", input = { a = 1 } })
+    assert(head:find("tool  SomeFutureTool %(a%)"), head)
+  end,
+
+  ["feed: _task_update_head shows taskId before the result, subject after"] = function()
+    local before = feed._task_update_head({ taskId = "7", status = "completed" }, nil)
+    assert(before == "▸ todo  completed: 7", before)
+    local after = feed._task_update_head(
+      { taskId = "7", status = "completed" },
+      { task = { id = "7", subject = "Ship it" } }
+    )
+    assert(after == "▸ todo  completed: Ship it", after)
+  end,
+
+  ["feed: _workflow_name parses meta.name, falls back to first line when absent"] = function()
+    assert(
+      feed._workflow_name("export const meta = {\n  name: 'fortunemill-full-audit',\n  description: 'x'\n}")
+        == "fortunemill-full-audit"
+    )
+    assert(feed._workflow_name('export const meta = { name: "double-quoted" }') == "double-quoted")
+    assert(feed._workflow_name("// no meta block here\nconsole.log(1)") == "// no meta block here")
+    assert(feed._workflow_name(nil) == "?")
+    assert(feed._workflow_name("") == "?")
+  end,
+
+  ["feed: _mcp_parts splits server/tool, defends malformed names"] = function()
+    local server, tool = feed._mcp_parts("mcp__chrome-devtools__evaluate_script")
+    assert(server == "chrome-devtools" and tool == "evaluate_script", server .. "/" .. tostring(tool))
+    server, tool = feed._mcp_parts("mcp__plugin_cloudflare_cloudflare-docs__search_cloudflare_documentation")
+    assert(server == "plugin_cloudflare_cloudflare-docs", server)
+    assert(tool == "search_cloudflare_documentation", tool)
+    server, tool = feed._mcp_parts("not_an_mcp_tool")
+    assert(server == nil and tool == nil)
+  end,
+
+  ["feed: _question_list defends the old single-question shape"] = function()
+    local qs = feed._question_list({ questions = { { question = "A?" }, { question = "B?" } } })
+    assert(#qs == 2)
+    qs = feed._question_list({ question = "solo?", options = { { label = "x" } } })
+    assert(#qs == 1 and qs[1].question == "solo?", vim.inspect(qs))
+    qs = feed._question_list({})
+    assert(#qs == 0)
+  end,
+
+  ["feed: _question_head shows question count only when there's more than one"] = function()
+    assert(feed._question_head({ { question = "solo?" } }) == "▸ ask   solo?")
+    local h = feed._question_head({ { question = "first?" }, { question = "second?" } })
+    assert(h == "▸ ask   (2) first?", h)
   end,
 
   ["feed: end-to-end over a local fixture file"] = function()
@@ -139,6 +336,36 @@ return {
     assert(text:find("▾ bash  echo hi", 1, true), "fold glyph should flip:\n" .. text)
     assert(text:find("│ echo there", 1, true), "expanded body missing:\n" .. text)
     assert(text:find("│ hi", 1, true), "result stdout missing in fold:\n" .. text)
+
+    feed.close(f.buf)
+    vim.fn.delete(path)
+  end,
+
+  ["feed: end-to-end — TaskCreate and an answered two-question AskUserQuestion render as folds"] = function()
+    local path = vim.fn.tempname() .. ".jsonl"
+    vim.fn.writefile(modern_fixture_lines(), path)
+    local f = feed.open_path({ node = nil, path = path })
+    local ok = vim.wait(5000, function()
+      return not f.backfilling and buf_text(f.buf):find("end of turn") ~= nil
+    end, 50)
+    assert(ok, "feed did not render within 5s:\n" .. buf_text(f.buf))
+    local text = buf_text(f.buf)
+    assert(text:find("▸ todo  + Ship the thing", 1, true), text)
+    assert(text:find("▸ ask   (2)", 1, true), text)
+
+    -- expand the question fold and confirm the chosen answer(s) show up
+    local row
+    for i, l in ipairs(vim.api.nvim_buf_get_lines(f.buf, 0, -1, false)) do
+      if l:find("▸ ask   (2)", 1, true) then
+        row = i
+      end
+    end
+    assert(row, "question fold head not found:\n" .. text)
+    vim.api.nvim_win_set_cursor(0, { row, 0 })
+    vim.api.nvim_feedkeys(vim.api.nvim_replace_termcodes("<Tab>", true, false, true), "x", false)
+    text = buf_text(f.buf)
+    assert(text:find("▾ ask   (2)", 1, true), "question fold glyph should flip:\n" .. text)
+    assert(text:find("→ chosen:", 1, true), "expanded question body missing a chosen answer:\n" .. text)
 
     feed.close(f.buf)
     vim.fn.delete(path)
