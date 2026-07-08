@@ -584,7 +584,7 @@ local function start_stream(feed, offset)
     end
   end)
 
-  ssh.exec(feed.host, ("tail -c +%d '%s' 2>/dev/null"):format(offset + 1, feed.path), function(ok, stdout)
+  ssh.exec(feed.host, ("tail -c +%d %s 2>/dev/null"):format(offset + 1, ssh.shq(feed.path)), function(ok, stdout)
     if not vim.api.nvim_buf_is_valid(feed.buf) then
       return
     end
@@ -828,7 +828,7 @@ function M.open_path(opts)
   -- "parsed not rendered" regardless. start the parser at the window boundary.
   local cfg2 = require("giroux").config
   local window = cfg2.initial_tail or 262144
-  ssh.exec(feed.host, ("wc -c < '%s'"):format(feed.path), function(ok, stdout)
+  ssh.exec(feed.host, ("wc -c < %s"):format(ssh.shq(feed.path)), function(ok, stdout)
     if not vim.api.nvim_buf_is_valid(buf) then
       return
     end

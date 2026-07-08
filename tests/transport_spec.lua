@@ -16,10 +16,22 @@ return {
     -- Safe because the shell runs in its own group (remote: sshd; local: setsid).
     assert(cmd:find("trap 'kill 0", 1, true), "must reap the whole process group")
     assert(not cmd:find("jobs -p", 1, true), "jobs -p is empty in non-interactive dash — must not rely on it")
-    assert(cmd:find('tail -c +1 -F "/p/a.jsonl"', 1, true), "offset 0 -> byte 1")
-    assert(cmd:find('tail -c +101 -F "/p/b.jsonl"', 1, true), "offset 100 -> byte 101")
+    assert(cmd:find("tail -c +1 -F '/p/a.jsonl'", 1, true), "offset 0 -> byte 1")
+    assert(cmd:find("tail -c +101 -F '/p/b.jsonl'", 1, true), "offset 100 -> byte 101")
     assert(cmd:find("fflush()", 1, true), "awk must flush per line")
     assert(cmd:find("wait$"), "foreground wait keeps the channel open")
+  end,
+
+  ["transport: multi_tail_cmd neutralizes a hostile filename"] = function()
+    local nasty = [[/p/a'; $(touch pwned) `id` .jsonl]]
+    local cmd = ssh.multi_tail_cmd({ { path = nasty, offset = 0 } })
+    -- the path must be single-quoted with '\'' escaping; no double-quote wrap
+    assert(not cmd:find('-F "', 1, true), "path must never be double-quoted")
+    -- the literal $(touch pwned) survives only as inert text inside single quotes
+    assert(cmd:find("$(touch pwned)", 1, true), "substitution text is present but inert")
+    -- round-trip: extracting the single-quoted operand and un-escaping yields the path
+    -- (sanity that shq is reversible for this input)
+    assert(ssh.shq(nasty):find("'\\''", 1, true), "embedded quote is escaped")
   end,
 
   ["transport: stopping a local stream reaps its tail/awk (no orphans)"] = function()

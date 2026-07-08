@@ -137,7 +137,7 @@ function M.open(opts)
   -- full parse over SSH: cat | parse locally (gauntlet: ~250MB/s)
   local acc = stats.new()
   local parser = transcript.parser()
-  local strm = ssh.stream(node.host, ("cat '%s'"):format(opts.path), function(chunk)
+  local strm = ssh.stream(node.host, ("cat %s"):format(ssh.shq(opts.path)), function(chunk)
     for _, e in ipairs(parser:feed(chunk)) do
       acc:add(e)
     end

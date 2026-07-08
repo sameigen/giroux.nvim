@@ -186,7 +186,7 @@ function M.open(opts)
 
   local parser = transcript.parser()
   local events = {}
-  ssh.stream(node.host, ("cat '%s'"):format(opts.path), function(chunk)
+  ssh.stream(node.host, ("cat %s"):format(ssh.shq(opts.path)), function(chunk)
     vim.list_extend(events, parser:feed(chunk))
   end, function()
     if not vim.api.nvim_buf_is_valid(buf) then

@@ -5,6 +5,16 @@
 
 local M = {}
 
+---Single-quote a string for POSIX sh: literal for everything except `'`, which
+---is closed, escaped, and reopened. The ONLY safe wrap for a semi-trusted path
+---(a transcript filename) that ends up in a remote shell command — never use
+---double quotes, which keep $(), backticks and \ live.
+---@param s string
+---@return string
+function M.shq(s)
+  return "'" .. s:gsub("'", "'\\''") .. "'"
+end
+
 ---Wrap a command to run under a LOGIN shell on the target, so the user's
 ---profile is sourced (~/.zshenv / ~/.zprofile): Homebrew PATH — so tmux and
 ---claude are found over non-interactive ssh — and CLAUDE_CODE_OAUTH_TOKEN — so
@@ -108,7 +118,7 @@ function M.tail(host, path, offset, on_chunk, on_exit)
   -- would orphan the child tail (`tail -F` never exits on its own). With exec
   -- the tail IS the spawned process, so proc:kill (local) or the ssh dying
   -- (remote → SIGHUP) reaps it cleanly.
-  local cmd = ("exec tail -c +%d -F '%s' 2>/dev/null"):format(offset + 1, path)
+  local cmd = ("exec tail -c +%d -F %s 2>/dev/null"):format(offset + 1, M.shq(path))
   return M.stream(host, cmd, on_chunk, on_exit)
 end
 
@@ -128,10 +138,10 @@ end
 function M.multi_tail_cmd(files)
   local parts = { "trap 'kill 0 2>/dev/null' EXIT HUP TERM INT;" }
   for _, f in ipairs(files) do
-    parts[#parts + 1] = ('tail -c +%d -F "%s" 2>/dev/null | awk -v p="%s" \'{ print p "\\t" $0; fflush() }\' &'):format(
+    parts[#parts + 1] = ("tail -c +%d -F %s 2>/dev/null | awk -v p=%s '{ print p \"\\t\" $0; fflush() }' &"):format(
       f.offset + 1,
-      f.path,
-      f.path
+      M.shq(f.path),
+      M.shq(f.path)
     )
   end
   parts[#parts + 1] = "wait"
