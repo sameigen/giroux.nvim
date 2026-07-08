@@ -40,7 +40,8 @@ Companion to parole.nvim: giroux supervises the work, parole reviews it.
 
 - Neovim >= 0.11
 - `ssh` and `tmux`
-- macOS nodes today (uses BSD `stat`); Linux support is planned
+- macOS and Linux nodes (discovery is portable: GNU `stat -c` with a BSD
+  `stat -f` fallback)
 - Optional: `tailscale` (only for node auto-discovery)
 
 Run `:checkhealth giroux` to verify the environment per node.
@@ -218,7 +219,8 @@ Defaults (abbreviated): >lua
     nodes = {},               -- name -> { host, claude_projects }
     tmux_rename = true,       -- rename sessions to the transcript's ai-title
     roots = { "~/Code" },     -- searched on :GirouxDispatch
-    refresh_interval = 30,
+    refresh_interval = 1,     -- roster display heartbeat, seconds (0 disables)
+    live_interval = 3,        -- liveness poll: process truth + needs-you + tmux title spinner
     discover_interval = 10,
     active_window = 240,      -- minutes of mtime considered "live"
     dispatch = {

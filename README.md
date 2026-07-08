@@ -76,7 +76,7 @@ tmux and become steerable (headless/`-p` runs are untouched):
 (by machine / repo / state, needs-you first), live `claude agents --json` state,
 zero-config tailnet discovery, login-shell dispatch (no `/login` hangs), and a
 zero-coupling handoff from [parole.nvim](https://github.com/sameigen/parole.nvim).
-Built and tested (74 specs; the JSONL parser is gauntleted against 270+ real
+Built and tested (106 specs; the JSONL parser is gauntleted against 270+ real
 transcripts, 0 crashes). Design rationale lives in [DESIGN.md](DESIGN.md), the
 build map in [ARCHITECTURE.md](ARCHITECTURE.md), the phased plan in [PLAN.md](PLAN.md).
 

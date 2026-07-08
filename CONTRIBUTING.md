@@ -6,9 +6,9 @@ welcome.
 ## Scope
 
 giroux observes and steers Claude Code sessions by tailing their JSONL
-transcripts. It is **macOS-only today** (discovery uses BSD `stat`/`tail`);
-Linux support is tracked in [PLAN.md](PLAN.md). It is also **Claude-Code-only**
-by design — no agent-abstraction layer.
+transcripts. It supports **macOS and Linux nodes** (discovery is portable:
+GNU `stat -c` with a BSD `stat -f` fallback). It is also
+**Claude-Code-only** by design — no agent-abstraction layer.
 
 ## Development
 
@@ -22,10 +22,12 @@ nvim -l scripts/gauntlet.lua ~/.claude/projects   # stream real transcripts, pro
 stylua --check lua/ tests/     # formatting (run `stylua lua/ tests/` to fix)
 ```
 
-CI runs stylua + smoke + the specs + the gauntlet (against a committed fixture
-corpus, `tests/fixtures/transcripts/`) on Linux (stable/nightly) and macOS.
-Integration specs that need `zsh` or BSD `stat` skip themselves off-platform —
-see `tests/helpers.lua` (`skip_unless`).
+CI runs four jobs: `stylua` (format check), `lint` (`selene`), `typecheck`
+(`nvim-typecheck-action`), and `test` — smoke + the specs + the gauntlet
+(against a committed fixture corpus, `tests/fixtures/transcripts/`) — on
+Linux (stable/nightly) and macOS. Integration specs that need `zsh` or BSD
+`stat` skip themselves off-platform — see `tests/helpers.lua`
+(`skip_unless`).
 
 ## Conventions
 

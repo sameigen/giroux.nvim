@@ -1,6 +1,6 @@
 # giroux.nvim — architecture
 
-The state of the build as of 2026-06-11. For the *why* behind each decision
+The state of the build as of 2026-07-08. For the *why* behind each decision
 see [DESIGN.md](DESIGN.md); this doc is the *what* and *how* — the map a new
 contributor needs.
 
@@ -52,7 +52,8 @@ that needs a *way in* is steering — and that rides tmux (not yet built).
 | `dispatch.lua` | `:GirouxDispatch` — node→repo→worktree→context→detached `tmux new-session` + claude (GIROUX_SESSION_ID injected), auto-accepts the folder-trust dialog, follows the new transcript onto the roster/feed. |
 | `steer.lua` | the steering plane on tmuxctl correlation: `send` (base64 paste-buffer + Enter), `buffer` (compose split, :w sends), `attach` (TUI in a terminal tab; ssh -t for remote), `answer`/`pick`/`read_question`/`parse_question` (answer-pick reads the live picker off the tmux pane — see the AskUserQuestion finding below). Uncorrelated sessions degrade to observe-only. |
 | `notify.lua` | interrupt-worthy moments → channels (`config.notify.levels`: statusline badge / `vim.notify` / macOS osascript). Fires on state ENTRY; conditions already true on first sight seed silently (badge only). `statusline()` is a user statusline component. |
-| `health.lua` | `:checkhealth giroux` (stub). |
+| `health.lua` | `:checkhealth giroux` — local prereqs (Neovim version, `ssh`/`tmux`/`tailscale` binaries, wrapper sourced), then per node: ssh reachability, OS detection, `tmux`/`claude` on PATH, and an auth probe (`AUTH_PROBE` validates whatever credential `claude` would use against `/v1/models` on the node, so a stale/missing token that would hang a dispatch on `/login` is flagged up front). |
+| `pick.lua` | a built-in type-to-filter picker: pure `M.rank` (fuzzy-match + sort, unit-tested) with `M.open` as a thin floating-window shell around it. No dependency on the user's `vim.ui.select` backend. Used by dispatch's node/repo/worktree/reap pickers and steer's answer-pick. |
 
 ## Conventions worth keeping
 
@@ -75,7 +76,7 @@ that needs a *way in* is steering — and that rides tmux (not yet built).
 ## Test & verify
 
 ```
-nvim -l tests/run.lua            # unit + integration specs (39 currently)
+nvim -l tests/run.lua            # unit + integration specs (106 currently)
 nvim -l scripts/smoke.lua        # every module loads, config merges
 nvim -l scripts/gauntlet.lua DIR # stream every real transcript, prove 0 crashes
 ```
@@ -90,8 +91,16 @@ rebuild the node's stream with per-file resume offsets. Feeds ride the same
 stream via `monitor.subscribe_lines(node, path, on_line, on_drop)` —
 on_line carries the line's byte offset so the feed drops what its own
 window snapshot already covered; on_drop (monitor stopped tracking) falls
-back to an owned `tail -F`. A `trap 'kill $(jobs -p)'` reaps the remote
-tails on disconnect (never `kill 0` — locally that's nvim's process group).
+back to an owned `tail -F`. `ssh.multi_tail_cmd` opens with
+`trap 'kill 0 2>/dev/null' EXIT HUP TERM INT` — `kill 0`, the whole process
+group — to reap every backgrounded `tail`/`awk` pair when the connection
+drops or the stream is stopped. `kill 0` is the ONLY portable reap: a
+non-interactive `dash` (Linux `/bin/sh`) runs with job control off, so
+`jobs -p` is empty and a `kill $(jobs -p)` trap reaps nothing, leaking every
+tail. It's safe because the shell always runs in its OWN process group —
+remotely sshd isolates the command, and locally `ssh.stream` spawns it
+detached (`detach = not host`, libuv `setsid`) so `kill 0` never touches
+nvim's own group.
 
 ## The AskUserQuestion transcript finding (2026-06-11)
 
@@ -110,7 +119,7 @@ pane-derived `?` into the roster for tmux sessions.)
 
 - `?` roster state is dead for non-tmux (observe-only) sessions — see the
   finding above; needs pane-based detection for tmux sessions (phase 5).
-- `sessions.lua`/`monitor.lua` use BSD `stat` (macOS). Linux nodes need
-  `stat -c '%Y %s %W'`. Gate on node OS when a Linux node comes online.
 - `nodes.lua`: `host = false` means "local" (used by tests for fake roots).
-- `:GirouxClean` is still a stub.
+- `:GirouxClean` reaps idle detached tmux sessions but doesn't yet prune
+  the worktrees they leave behind (`dispatch.lua`: "Worktree pruning is a
+  follow-up").
