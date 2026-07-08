@@ -100,12 +100,16 @@ end
 ---@param id string GIROUX_SESSION_ID
 ---@param dir string cwd for the agent
 ---@param prompt string
+---@param headless boolean|nil append dispatch.headless_flags (:GirouxDispatch!)
 ---@return string
-function M.launch_cmd(name, id, dir, prompt)
+function M.launch_cmd(name, id, dir, prompt, headless)
   local d = require("giroux").config.dispatch
   local argv = {}
   vim.list_extend(argv, d.cmd)
   vim.list_extend(argv, d.flags or {})
+  if headless then
+    vim.list_extend(argv, d.headless_flags or {})
+  end
   argv[#argv + 1] = prompt
   return job_launch(name, id, dir, argv)
 end
@@ -224,33 +228,39 @@ end
 
 ---@param node_name string
 ---@param dir string
-local function launch_in(node_name, dir)
+---@param headless boolean|nil
+local function launch_in(node_name, dir, headless)
   compose("agent context — " .. vim.fs.basename(dir), function(prompt)
     local _, node = nodes.get(node_name)
     local id = vim.fn.system("uuidgen"):lower():gsub("%-.*", ""):gsub("%s", "")
     local base = vim.fs.basename(dir):gsub("[^%w_-]", "-")
     local name = ("%s/%s-%s"):format(require("giroux").config.dispatch.tmux_prefix, base, id:sub(1, 4))
     -- outer login-wrap so `tmux` resolves on non-interactive ssh (Homebrew PATH)
-    ssh.exec(node.host, ssh.login_wrap(M.launch_cmd(name, id, dir, prompt)), function(ok, _, stderr)
+    ssh.exec(node.host, ssh.login_wrap(M.launch_cmd(name, id, dir, prompt, headless)), function(ok, _, stderr)
       if not ok then
         return vim.notify("giroux: dispatch failed: " .. vim.trim(stderr or ""), vim.log.levels.ERROR)
       end
       vim.notify(("giroux: dispatched %s on %s"):format(name, node_name))
-      accept_trust(node_name, name)
-      follow_new_session(node_name, dir, os.time())
+      if headless then
+        vim.notify(("giroux: headless run %s dispatched fire-and-forget"):format(name))
+      else
+        accept_trust(node_name, name)
+        follow_new_session(node_name, dir, os.time())
+      end
     end)
   end)
 end
 
 ---@param node_name string
 ---@param repo string
-local function maybe_worktree(node_name, repo)
+---@param headless boolean|nil
+local function maybe_worktree(node_name, repo, headless)
   vim.ui.select({ "run in the repo", "fresh worktree" }, { prompt = "where should the agent work?" }, function(choice)
     if not choice then
       return
     end
     if choice == "run in the repo" then
-      return launch_in(node_name, repo)
+      return launch_in(node_name, repo, headless)
     end
     vim.ui.input({ prompt = "branch name: ", default = "agent/" }, function(branch)
       if not branch or vim.trim(branch) == "" then
@@ -272,7 +282,7 @@ local function maybe_worktree(node_name, repo)
         -- worktree paths carry a leading ~ until the remote shell expands it;
         -- launch needs a real path, so resolve it for slug/correlation.
         ssh.exec(node.host, ("cd %s && pwd"):format(shq_path(wt)), function(ok2, pwd)
-          launch_in(node_name, ok2 and vim.trim(pwd) or wt)
+          launch_in(node_name, ok2 and vim.trim(pwd) or wt, headless)
         end)
       end)
     end)
@@ -401,9 +411,10 @@ function M.clean(opts)
 end
 
 ---Interactive dispatch: node → repo → (worktree?) → context → launch.
----@param opts {node: string|nil}|nil
+---@param opts {node: string|nil, headless: boolean|nil}|nil
 function M.open(opts)
   opts = opts or {}
+  local headless = opts.headless
   local all = nodes.all()
   local names = vim.tbl_keys(all)
   table.sort(names)
@@ -418,7 +429,7 @@ function M.open(opts)
         format = repo_label,
         on_choice = function(it)
           if it then
-            maybe_worktree(node_name, it.path)
+            maybe_worktree(node_name, it.path, headless)
           end
         end,
       })

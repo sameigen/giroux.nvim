@@ -141,6 +141,20 @@ return {
     assert(cmd:find("set%-option .* mouse on"), "styled like the wrapper")
   end,
 
+  ["dispatch: launch_cmd with headless appends headless_flags"] = function()
+    local cmd = dispatch.launch_cmd("giroux/x-2222", "id22", "/tmp/x", "do the thing", true)
+    -- the agent argv travels base64; decode and assert -p / output-format present
+    local b64 = (cmd:match("printf %%s%s+(.-)%s+|%s+base64") or ""):gsub("[^A-Za-z0-9+/=]", "")
+    local decoded = vim.base64.decode(b64)
+    assert(decoded:find("%-p", 1, false) or decoded:find(" -p", 1, true), "headless passes -p: " .. decoded)
+    assert(decoded:find("output-format", 1, true), "headless passes --output-format: " .. decoded)
+    assert(decoded:find("dangerously-skip-permissions", 1, true), "base flags still applied")
+    -- non-headless must NOT add -p
+    local plain = dispatch.launch_cmd("giroux/x-3333", "id33", "/tmp/x", "do the thing")
+    local pb64 = (plain:match("printf %%s%s+(.-)%s+|%s+base64") or ""):gsub("[^A-Za-z0-9+/=]", "")
+    assert(not vim.base64.decode(pb64):find("output-format", 1, true), "plain dispatch stays interactive")
+  end,
+
   ["dispatch: launch_cmd quoting survives real shell execution"] = function()
     -- fake tmux: new-session is a no-op (real tmux would start a shell);
     -- send-keys runs the command it would type into that shell (the arg before
