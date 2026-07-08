@@ -3,3 +3,17 @@ base: lua51
 globals:
   vim:
     any: true
+  # override the builtin: assert's message arg is optional (the repo's spec
+  # style uses bare assert(cond) freely; selene's default marks it required).
+  assert:
+    args:
+      - type: any
+      - type: any
+        required: false
+      - type: "..."
+        required: false
+  # selene's lua51 std doesn't model the stderr/stdout file handles' methods
+  io.stderr:
+    any: true
+  io.stdout:
+    any: true

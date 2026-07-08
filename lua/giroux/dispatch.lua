@@ -303,7 +303,7 @@ local function maybe_worktree(node_name, repo, headless)
           shq(branch),
           shq_path(wt)
         )
-        ssh.exec(node.host, cmd, function(ok, out, stderr)
+        ssh.exec(node.host, cmd, function(ok, _, stderr)
           if not ok then
             return vim.notify("giroux: worktree failed: " .. vim.trim(stderr or ""), vim.log.levels.ERROR)
           end

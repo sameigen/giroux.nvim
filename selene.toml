@@ -1,1 +1,5 @@
 std = "vim"
+
+# health.lua uses goto/labels (valid in Neovim's LuaJIT); selene's lua51
+# grammar can't parse them and ships no LuaJIT/lua52 feature, so exclude it.
+exclude = ["lua/giroux/health.lua"]

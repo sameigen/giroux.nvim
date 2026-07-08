@@ -6,6 +6,7 @@ local root = vim.fs.dirname(vim.fs.dirname(debug.getinfo(1, "S").source:sub(2)))
 vim.opt.runtimepath:prepend(root)
 package.path = root .. "/tests/?.lua;" .. package.path -- so specs can require("helpers")
 
+-- selene: allow(global_usage) -- `arg` is nvim -l's argv; _G access is deliberate
 local filter = _G.arg and _G.arg[1] or nil
 local specs = vim.fn.glob(root .. "/tests/*_spec.lua", false, true)
 table.sort(specs)

@@ -185,19 +185,19 @@ function M.build(items, group_by, collapsed)
   local hide = (group_by == "machine" and "node") or (group_by == "repo" and "project") or nil
   for _, k in ipairs(order) do
     local g = groups[k]
-    local q, dead, done = 0, 0, 0
+    local q, dead, done_n = 0, 0, 0
     for _, it in ipairs(g) do
       if it.state == "?" then
         q = q + 1
       elseif it.state == "✗" then
         dead = dead + 1
       elseif it.state == "✓" then
-        done = done + 1
+        done_n = done_n + 1
       end
     end
     local badge = (q > 0 and ("  ?%d"):format(q) or "")
       .. (dead > 0 and (" ✗%d"):format(dead) or "")
-      .. (done > 0 and (" ✓%d"):format(done) or "")
+      .. (done_n > 0 and (" ✓%d"):format(done_n) or "")
     -- namespace the fold key by grouping mode so folding repo "loper" doesn't
     -- also fold a machine named "loper" after a Ctrl+S regroup.
     local ckey = group_by .. "\0" .. k

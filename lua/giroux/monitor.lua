@@ -155,7 +155,7 @@ local function derive(tr, live)
   -- fire/clear interrupt-worthy notifications on state ENTRY. A condition
   -- already true on first sight is seeded silently (counts on the badge, no
   -- banner) — only a transition that happens while we're watching pages.
-  local notify = require("giroux.notify")
+  local notif = require("giroux.notify")
   -- seed silently for the whole pre-watch replay (live == false), not just the
   -- first line: an answered AskUserQuestion re-enters ? during replay and would
   -- otherwise page for a question already resolved. Only witnessed (live)
@@ -164,12 +164,12 @@ local function derive(tr, live)
   tr.primed = true
   local function signal(event, on, msg)
     if not on then
-      return notify.clear(event, tr.session)
+      return notif.clear(event, tr.session)
     end
     if seed then
-      notify.seed(event, tr.session)
+      notif.seed(event, tr.session)
     else
-      notify.fire(event, tr.session, msg)
+      notif.fire(event, tr.session, msg)
     end
   end
   signal("question", st == "?", "needs your input — " .. (tr.session.title or tr.session.project or ""))
