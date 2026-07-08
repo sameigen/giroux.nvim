@@ -53,6 +53,48 @@ local function compose(title, on_submit)
   vim.cmd.startinsert()
 end
 
+---Per-session tmux styling (minimal status, mouse, title), mirroring the
+---wrapper. Returns the set-option commands for one session.
+---@param name string tmux session name
+---@return string[]
+local function styling(name)
+  local set = function(opt, val)
+    return ("tmux set-option -t %s %s %s >/dev/null"):format(shq(name), opt, val)
+  end
+  return {
+    set("status", "on"),
+    set("status-left", "'#S '"),
+    set("status-left-length", "60"),
+    set("status-right", "''"),
+    set("status-style", "'bg=default,fg=colour244'"),
+    set("mouse", "on"),
+    set("set-titles", "on"),
+    set("set-titles-string", "'#S'"),
+  }
+end
+
+---Launch `argv` as a FOREGROUND JOB inside an interactive login shell in a fresh
+---tmux session — not as the pane command. The shell gives job control (C-z
+---suspends the agent to a prompt, `fg` resumes) and sources the profile (PATH +
+---CLAUDE_CODE_OAUTH_TOKEN, so no /login hardblock). The argv travels base64 and
+---is run via `eval`, so a multiline prompt can't break `send-keys` (a newline
+---would submit early) and no quoting layer can mangle it.
+---@param name string tmux session name
+---@param id string GIROUX_SESSION_ID
+---@param dir string cwd
+---@param argv string[] the agent command + args
+---@return string
+local function job_launch(name, id, dir, argv)
+  local b64 = vim.base64.encode(table.concat(vim.tbl_map(shq, argv), " "))
+  local run = ('eval "$(printf %%s %s | base64 -d)"'):format(shq(b64))
+  local parts = {
+    ("tmux new-session -d -s %s -e GIROUX_SESSION_ID=%s -c %s"):format(shq(name), shq(id), shq(dir)),
+    ("tmux send-keys -t %s %s Enter"):format(shq(name), shq(run)),
+  }
+  vim.list_extend(parts, styling(name))
+  return table.concat(parts, " && ")
+end
+
 ---Build the remote launch command. Exposed for tests.
 ---@param name string tmux session name
 ---@param id string GIROUX_SESSION_ID
@@ -65,41 +107,64 @@ function M.launch_cmd(name, id, dir, prompt)
   vim.list_extend(argv, d.cmd)
   vim.list_extend(argv, d.flags or {})
   argv[#argv + 1] = prompt
-  -- login-wrap the agent itself: tmux runs this command in the (possibly stale)
-  -- server env, so the dispatched claude must source ~/.zshenv for its token and
-  -- ~/.zprofile for PATH — otherwise it falls back to the locked GUI keychain and
-  -- hard-blocks on /login at the first message.
-  local inner = ssh.login_wrap(table.concat(vim.tbl_map(shq, argv), " "))
-  local set = function(opt, val)
-    return ("tmux set-option -t %s %s %s >/dev/null"):format(shq(name), opt, val)
-  end
-  return table.concat({
-    ("tmux new-session -d -s %s -e GIROUX_SESSION_ID=%s -c %s %s"):format(shq(name), shq(id), shq(dir), shq(inner)),
-    set("status", "on"),
-    set("status-left", "'#S '"),
-    set("status-left-length", "60"),
-    set("status-right", "''"),
-    set("status-style", "'bg=default,fg=colour244'"),
-    set("mouse", "on"),
-    set("set-titles", "on"),
-    set("set-titles-string", "'#S'"),
-  }, " && ")
+  return job_launch(name, id, dir, argv)
 end
 
----Find repos under the configured roots on a node (one ssh round-trip).
+---@param secs integer
+---@return string compact age ("12m" | "3h" | "5d")
+local function age_short(secs)
+  if secs < 3600 then
+    return ("%dm"):format(math.max(0, math.floor(secs / 60)))
+  elseif secs < 86400 then
+    return ("%dh"):format(math.floor(secs / 3600))
+  end
+  return ("%dd"):format(math.floor(secs / 86400))
+end
+
+---Picker label for a repo: "<parent>/<name>" (short + recognizable, and what
+---you fuzzy-match on) plus a recency hint. Avoids the ~-vs-absolute mismatch a
+---root-prefix strip would hit (the remote `find ~/x` returns absolute paths).
+---@param it {path: string, mtime: integer}
+---@return string
+local function repo_label(it)
+  local parent = vim.fs.basename(vim.fs.dirname(it.path))
+  local disp = (parent ~= "" and parent ~= ".") and (parent .. "/" .. vim.fs.basename(it.path))
+    or vim.fs.basename(it.path)
+  if it.mtime and it.mtime > 0 then
+    return ("%-46s %s"):format(disp, age_short(os.time() - it.mtime))
+  end
+  return disp
+end
+
+---Find repos under a node's roots (per-node `roots`, else the global), newest
+---first. One ssh round-trip; emits "<mtime>\t<repo>" so the picker can sort by
+---recency and show an age. stat is portable (GNU -c, BSD -f); the while-read
+---(IFS=, -r) keeps repo paths with spaces intact.
 ---@param node_name string
----@param cb fun(repos: string[])
+---@param cb fun(repos: {path: string, mtime: integer}[])
 local function find_repos(node_name, cb)
   local _, node = nodes.get(node_name)
   local cfg = require("giroux").config
-  local roots = table.concat(vim.tbl_map(shq_path, cfg.roots), " ")
-  -- built by concatenation, not :format — the sed pattern contains a literal
-  -- '%' would-be format directive ('/\.git$') and the find expr has none.
+  local roots = table.concat(vim.tbl_map(shq_path, node.roots or cfg.roots), " ")
+  -- built by concatenation, not :format — the body has literal '%' (stat -c %Y,
+  -- ${g%/.git}, printf %s) that would read as format directives.
   local cmd = "find "
     .. roots
-    .. " -maxdepth 3 -name .git \\( -type d -o -type f \\) 2>/dev/null | sed 's|/\\.git$||' | sort"
+    .. " -maxdepth 3 -name .git \\( -type d -o -type f \\) 2>/dev/null"
+    .. " | while IFS= read -r g; do d=${g%/.git};"
+    .. ' m=$(stat -c %Y "$d" 2>/dev/null || stat -f %m "$d" 2>/dev/null);'
+    .. ' printf \'%s\\t%s\\n\' "${m:-0}" "$d"; done | sort -rn'
   ssh.exec(node.host, cmd, function(ok, stdout)
-    cb(ok and vim.split(vim.trim(stdout), "\n", { trimempty = true }) or {})
+    local repos = {}
+    if ok then
+      for line in vim.gsplit(vim.trim(stdout), "\n", { trimempty = true }) do
+        local mtime, path = line:match("^(%d+)\t(.+)$")
+        if path then
+          repos[#repos + 1] = { path = path, mtime = tonumber(mtime) or 0 }
+        end
+      end
+    end
+    cb(repos)
   end)
 end
 
@@ -228,25 +293,7 @@ function M.resume_cmd(name, gid, dir, session_id)
   argv[#argv + 1] = "--resume"
   argv[#argv + 1] = session_id
   vim.list_extend(argv, d.flags or {})
-  -- login-wrap the agent itself: tmux runs this command in the (possibly stale)
-  -- server env, so the dispatched claude must source ~/.zshenv for its token and
-  -- ~/.zprofile for PATH — otherwise it falls back to the locked GUI keychain and
-  -- hard-blocks on /login at the first message.
-  local inner = ssh.login_wrap(table.concat(vim.tbl_map(shq, argv), " "))
-  local set = function(opt, val)
-    return ("tmux set-option -t %s %s %s >/dev/null"):format(shq(name), opt, val)
-  end
-  return table.concat({
-    ("tmux new-session -d -s %s -e GIROUX_SESSION_ID=%s -c %s %s"):format(shq(name), shq(gid), shq(dir), shq(inner)),
-    set("status", "on"),
-    set("status-left", "'#S '"),
-    set("status-left-length", "60"),
-    set("status-right", "''"),
-    set("status-style", "'bg=default,fg=colour244'"),
-    set("mouse", "on"),
-    set("set-titles", "on"),
-    set("set-titles-string", "'#S'"),
-  }, " && ")
+  return job_launch(name, gid, dir, argv)
 end
 
 ---Resume a dead/observe-only session from its transcript: re-launch
@@ -284,6 +331,8 @@ function M.resume(node_name, session)
     end)
   end)
 end
+
+M._repo_label = repo_label -- exposed for tests
 
 M.IDLE_REAP_SECS = 1800 -- detached + silent this long = reapable
 
@@ -363,11 +412,16 @@ function M.open(opts)
       if #repos == 0 then
         return vim.notify("giroux: no repos under roots on " .. node_name, vim.log.levels.WARN)
       end
-      vim.ui.select(repos, { prompt = "repo on " .. node_name .. ":" }, function(repo)
-        if repo then
-          maybe_worktree(node_name, repo)
-        end
-      end)
+      require("giroux.pick").open({
+        items = repos,
+        title = "repo on " .. node_name,
+        format = repo_label,
+        on_choice = function(it)
+          if it then
+            maybe_worktree(node_name, it.path)
+          end
+        end,
+      })
     end)
   end
   if opts.node then

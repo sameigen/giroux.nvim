@@ -45,4 +45,13 @@ return {
     -- working but file silent 40min => dead inferred
     assert(sessions.derive_state({ t = { name = "Bash" } }, 2400) == "✗")
   end,
+
+  ["monitor: should_discover gates the heavy file listing to discover_interval"] = function()
+    -- fast liveness ticks (every few s) must NOT re-list files every time; the
+    -- expensive discovery only fires once discover_interval has elapsed.
+    assert(monitor.should_discover(0, 0, 10) == true, "never-discovered (last=0) must discover first")
+    assert(monitor.should_discover(1000, 997, 10) == false, "3s after a discovery: liveness only, no re-list")
+    assert(monitor.should_discover(1000, 990, 10) == true, "10s elapsed: time to re-list")
+    assert(monitor.should_discover(1000, 985, 10) == true, "past the interval: discover")
+  end,
 }

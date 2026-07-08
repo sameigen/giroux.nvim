@@ -400,18 +400,22 @@ function M.start(opts)
     return
   end
   state.running = true
+  state.last_discover = 0
   -- seed the discovered-node cache so the first pass already includes tailnet peers
   nodes.refresh(function()
     M.discover()
   end)
-  local interval = (require("giroux").config.discover_interval or 10) * 1000
+  -- The timer fires at the fast LIVENESS cadence; the heavy file-listing
+  -- discovery only runs every discover_interval (gated in M.tick). So "working"
+  -- and "needs you" surface within live_interval, not a whole discover cycle.
+  local interval = math.max(1, require("giroux").config.live_interval or 3) * 1000
   state.discover_timer = vim.uv.new_timer()
   state.discover_timer:start(
     interval,
     interval,
     vim.schedule_wrap(function()
       if next(state.subscribers) then
-        M.discover()
+        M.tick()
       else
         M.stop()
       end
@@ -419,9 +423,42 @@ function M.start(opts)
   )
 end
 
+---Should this tick do a full (file-listing) discovery, or just a light liveness
+---poll? Discovery is the expensive part (stat every node over ssh); liveness
+---(process truth + needs-you + the tmux title spinner) is cheap and is what
+---makes state feel instant. Pure, for tests.
+---@param now integer
+---@param last integer epoch of the last full discovery (0 = never)
+---@param interval integer discover_interval seconds
+---@return boolean
+function M.should_discover(now, last, interval)
+  if not last or last == 0 then
+    return true -- never discovered: the first tick must do a full pass
+  end
+  return (now - last) >= (interval or 10)
+end
+
+function M.tick()
+  if M.should_discover(os.time(), state.last_discover, require("giroux").config.discover_interval or 10) then
+    M.discover()
+  else
+    M.poll_live()
+  end
+end
+
 function M.discover()
+  state.last_discover = os.time()
   nodes.maybe_refresh() -- async; freshens the discovered-node cache for the next tick
   sessions.list(state.opts or {}, reconcile)
+  M.refresh_agents()
+  M.probe_questions()
+end
+
+---Light pass: refresh the liveness signals without re-listing files. Runs
+---between full discoveries so a session that starts working or asking is
+---reflected within live_interval rather than a full discover_interval.
+function M.poll_live()
+  nodes.maybe_refresh()
   M.refresh_agents()
   M.probe_questions()
 end

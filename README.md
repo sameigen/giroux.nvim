@@ -53,6 +53,13 @@ telegraphs what's inside; opening a `✓` session's feed demotes it to `○`.
 `<Tab>` fold · `K` peek line · `]]`/`[[` jump turns · `a` attach · `s` steer ·
 `<CR>` drill into a subagent, or answer the live question option · `Q` digest · `q` close
 
+### Attach keys (`:GirouxAttach` / `a`)
+`Esc` belongs to the agent · `C-z` suspends claude to a shell in the session — do
+work, then `fg` to resume (giroux runs claude as a job in an interactive shell;
+for a remote session that shell is *on that machine*) · `C-q` drops to nvim
+normal mode (scroll + visual-select-`y` to copy, then `i` resumes) · `C-b d`
+detach (agent runs on).
+
 ## Capture (optional but recommended)
 
 Source the wrapper so interactive `claude` sessions you start by hand land in

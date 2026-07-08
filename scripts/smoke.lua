@@ -7,6 +7,7 @@ local modules = {
   "giroux.monitor",
   "giroux.transcript",
   "giroux.roster",
+  "giroux.pick",
   "giroux.feed",
   "giroux.steer",
   "giroux.dispatch",
@@ -26,7 +27,7 @@ end
 local giroux = require("giroux")
 giroux.setup({ nodes = { workhorse = { host = "workhorse" } }, keymaps = { roster = { close = "x", diff = false } } })
 assert(giroux.config.nodes.workhorse.host == "workhorse")
-assert(giroux.config.refresh_interval == 30, "defaults must survive partial setup")
+assert(giroux.config.refresh_interval == 1, "defaults must survive partial setup")
 assert(giroux.config.dispatch.flags[1] == "--dangerously-skip-permissions", "opinionated default intact")
 assert(giroux.config.keymaps.roster.close == "x", "keymap override applies")
 assert(giroux.config.keymaps.roster.diff == false, "keymap can be disabled")

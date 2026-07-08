@@ -227,8 +227,24 @@ function M.buffer(it)
   end)
 end
 
----Attach the real TUI in a terminal tab. Esc belongs to the agent;
----<C-q> leaves terminal mode; C-b d detaches back to this tab.
+---Terminal-mode keymaps for an attached session. Pure data so it is testable.
+---<C-z> is deliberately NOT mapped: now that giroux launches claude as a job in
+---an interactive shell, ^Z suspends claude to that shell (for a remote session,
+---a shell ON that machine) where you can work and `fg` back — so we let it pass
+---straight through to the pane. <C-q> drops to nvim normal mode to browse the
+---terminal scrollback and visual-select → y to copy (the path tmux's nested
+---mouse copy-mode fights), then `i` resumes. <Esc> belongs to the agent.
+---@return {lhs: string, rhs: string, desc: string}[]
+function M.attach_keymaps()
+  return {
+    { lhs = "<Esc>", rhs = "<Esc>", desc = "Esc belongs to the agent (interrupt / rewind)" },
+    { lhs = "<C-q>", rhs = "<C-\\><C-n>", desc = "leave terminal mode — scroll/copy, then i to resume" },
+  }
+end
+
+---Attach the real TUI in a terminal tab. Esc belongs to the agent; C-z suspends
+---claude to a shell (do work, `fg` to resume); C-q → nvim normal mode (scroll +
+---copy, i resumes); C-b d detaches.
 ---@param it giroux.Session
 function M.attach(it)
   M.resolve(it, function(target)
@@ -244,8 +260,9 @@ function M.attach(it)
     end
     vim.cmd.tabnew()
     local buf = vim.api.nvim_get_current_buf()
-    vim.keymap.set("t", "<Esc>", "<Esc>", { buffer = buf, desc = "giroux: Esc belongs to the agent" })
-    vim.keymap.set("t", "<C-q>", "<C-\\><C-n>", { buffer = buf, desc = "giroux: leave terminal mode" })
+    for _, m in ipairs(M.attach_keymaps()) do
+      vim.keymap.set("t", m.lhs, m.rhs, { buffer = buf, desc = "giroux: " .. m.desc })
+    end
     vim.fn.jobstart(cmd, {
       term = true,
       on_exit = function()
@@ -262,7 +279,8 @@ function M.attach(it)
     })
     vim.cmd.startinsert()
     vim.notify(
-      "giroux: attached — detach with  C-b d  (agent keeps running); C-q for normal mode",
+      "giroux: attached — Esc → agent · C-z suspends claude to a shell (do work, then `fg`) · "
+        .. "C-q → nvim normal mode (scroll/copy, i resumes) · C-b d detaches",
       vim.log.levels.INFO
     )
   end)

@@ -16,6 +16,58 @@ local function run(argv)
   return res.code, res.stdout or "", res.stderr or ""
 end
 
+-- The node-side auth probe: pick the credential claude would use and validate
+-- it against /v1/models (an auth check, no completion / no billing). The token
+-- never leaves the node — only the resulting HTTP code comes back. A
+-- CLAUDE_CODE_OAUTH_TOKEN goes as a Bearer (how Claude Code sends it), an
+-- ANTHROPIC_API_KEY as x-api-key. /v1/models needs no beta header: a good
+-- credential is a clean 200, a stale/revoked one a 401.
+M.AUTH_PROBE = [[
+kind=none; hdr=
+if [ -n "$CLAUDE_CODE_OAUTH_TOKEN" ]; then
+  kind=oauth; hdr="Authorization: Bearer $CLAUDE_CODE_OAUTH_TOKEN"
+elif [ -n "$ANTHROPIC_API_KEY" ]; then
+  kind=apikey; hdr="x-api-key: $ANTHROPIC_API_KEY"
+fi
+if [ "$kind" = none ]; then printf 'giroux-auth:none:\n'
+elif command -v curl >/dev/null 2>&1; then
+  c=$(curl -s -o /dev/null -w '%{http_code}' --max-time 8 https://api.anthropic.com/v1/models -H "$hdr" -H "anthropic-version: 2023-06-01")
+  printf 'giroux-auth:%s:%s\n' "$kind" "$c"
+else printf 'giroux-auth:%s:nocurl\n' "$kind"; fi
+]]
+
+---Classify the node auth probe into a health line. Pure — unit-tested.
+---Returns nil for the no-credential case so the caller runs the keychain /
+---credentials-file fallback (which needs node context).
+---@param kind string "oauth"|"apikey"|"none"
+---@param status string HTTP code, "nocurl", or "" (no response)
+---@return "ok"|"warn"|"error"|nil level, string|nil msg
+function M.auth_status(kind, status)
+  if kind ~= "oauth" and kind ~= "apikey" then
+    return nil
+  end
+  local label = kind == "oauth" and "CLAUDE_CODE_OAUTH_TOKEN" or "ANTHROPIC_API_KEY"
+  local code = tonumber(status)
+  if code == 200 then
+    return "ok", "agent auth: " .. label .. " present and valid (HTTP 200)"
+  elseif code == 401 or code == 403 then
+    return "error",
+      ("agent auth: %s present but REJECTED (HTTP %d) — the token is stale or revoked, so dispatched "):format(
+        label,
+        code
+      ) .. "agents will hit /login. Regenerate with `claude setup-token`, update where it's exported " .. "(e.g. ~/.zshenv), then kill any long-lived `tmux` server on the node so new sessions pick it up."
+  elseif status == "nocurl" then
+    return "warn", "agent auth: " .. label .. " present, but curl is missing on the node — cannot validate it"
+  elseif code then
+    return "warn",
+      ("agent auth: %s present but validation returned HTTP %d (network/proxy?) — could not confirm"):format(
+        label,
+        code
+      )
+  end
+  return "warn", "agent auth: " .. label .. " present but validation got no response — could not confirm"
+end
+
 function M.check()
   local h = vim.health
   local nodes = require("giroux.nodes")
@@ -95,12 +147,15 @@ function M.check()
       -- login env they fall back to the GUI keychain, which is locked over ssh —
       -- so claude hard-blocks on /login at the first message. (macOS-only risk;
       -- Linux reads ~/.claude/.credentials.json, which is readable anywhere.)
-      -- Emit a marked line: a login shell may print profile chatter to stdout,
-      -- so key off the marker, not "non-empty output" (which a noisy ~/.zprofile
-      -- would falsely satisfy — a false "token present").
-      local _, tok = on_node('printf "giroux-auth:%s\\n" "${CLAUDE_CODE_OAUTH_TOKEN:+T}${ANTHROPIC_API_KEY:+K}"', true)
-      if (tok or ""):find("giroux%-auth:[TK]") then
-        h.ok("agent auth: token present in login env")
+      -- We don't just check presence: a *present but stale* token is the trap —
+      -- it reads as "configured" yet 401s mid-task — so the probe validates the
+      -- token against /v1/models and keys off the marked line (a login shell may
+      -- print profile chatter, so match the marker, not "non-empty output").
+      local _, tok = on_node(M.AUTH_PROBE, true)
+      local kind, status = (tok or ""):match("giroux%-auth:(%a*):(%w*)")
+      local level, msg = M.auth_status(kind or "", status or "")
+      if level then
+        h[level](msg)
       elseif uname == "Darwin" then
         h.warn(
           "no CLAUDE_CODE_OAUTH_TOKEN/ANTHROPIC_API_KEY in the login env — dispatched agents will hit /login "

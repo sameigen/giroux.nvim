@@ -94,6 +94,15 @@ reattach with `tmux attach -t giroux/...` or |:GirouxAttach|.
 
 :GirouxAttach [session]                                          *:GirouxAttach*
     Attach a session's tmux pane in a terminal tab (full TUI).
+    Keys while attached:
+      Esc        belongs to the agent (interrupt / Esc-Esc rewind)
+      C-z        suspends claude to a shell in the session — do work,
+                 then `fg` to resume. giroux runs claude as a job in
+                 an interactive shell, so this Just Works (for a
+                 remote session, the shell is on that machine).
+      C-q        drop to nvim normal mode — scroll the buffer and
+                 visual-select + `y` to copy, then `i` to resume.
+      C-b d      detach (the agent keeps running); reattach with `a`.
 
 :GirouxSteer [session]                                            *:GirouxSteer*
     Compose a message into a session without attaching (`:w` sends).

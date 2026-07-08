@@ -64,6 +64,25 @@ end, { nargs = "?", desc = "Reap giroux tmux sessions whose claude process has e
 if vim.g.giroux_focused == nil then
   vim.g.giroux_focused = false
 end
+-- Reap live transport on quit. vim.system children are NOT killed when nvim
+-- exits and `tail -F` never ends on its own, so without this every live tail
+-- (the merged per-node stream and any feed fallback tail) orphans to PID 1 and
+-- runs forever. Only touch modules that were actually loaded this session.
+vim.api.nvim_create_autocmd("VimLeavePre", {
+  group = vim.api.nvim_create_augroup("giroux_cleanup", { clear = true }),
+  desc = "giroux: stop live tail/ssh streams so they don't orphan on quit",
+  callback = function()
+    local mon = package.loaded["giroux.monitor"]
+    if mon then
+      pcall(mon.stop)
+    end
+    local feed = package.loaded["giroux.feed"]
+    if feed then
+      pcall(feed.cleanup)
+    end
+  end,
+})
+
 local focus_grp = vim.api.nvim_create_augroup("giroux_focus", { clear = true })
 vim.api.nvim_create_autocmd("FocusGained", {
   group = focus_grp,

@@ -55,10 +55,17 @@ claude() {
     cmd+=" ${(q)a}"
   done
 
-  if ! command tmux new-session -d -s "$name" -e GIROUX_SESSION_ID="$id" -c "$PWD" "$cmd"; then
+  # Start the session as an INTERACTIVE shell (job control on), then run claude
+  # as a FOREGROUND JOB in it via send-keys — so C-z suspends claude to a shell
+  # prompt and `fg` brings it back (the classic flow). Launching claude *as* the
+  # pane command, like we used to, left no shell to suspend to, so C-z just
+  # wedged the session. `$cmd` is the absolute binary, so this never re-enters
+  # the wrapper.
+  if ! command tmux new-session -d -s "$name" -e GIROUX_SESSION_ID="$id" -c "$PWD"; then
     command claude "$@"
     return $?
   fi
+  command tmux send-keys -t "$name" "$cmd" Enter
   # minimal, per-session styling — never touches global tmux config
   command tmux set-option -t "$name" status on >/dev/null
   command tmux set-option -t "$name" status-left "#S " >/dev/null

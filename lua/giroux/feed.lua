@@ -900,6 +900,21 @@ function M.close(buf)
   end
 end
 
+---Stop the transport behind every open feed. Called on VimLeavePre so a
+---feed's own fallback tail (the monitor-untracked case) doesn't orphan when
+---nvim quits. Buffers are left alone — the editor is tearing them down anyway;
+---only the live `ssh`/`tail` processes need stopping.
+function M.cleanup()
+  for _, feed in pairs(feeds) do
+    if feed.stream then
+      pcall(feed.stream.stop)
+    end
+    if feed.unsub_lines then
+      pcall(feed.unsub_lines)
+    end
+  end
+end
+
 ---Resolve `[node[/session-prefix]]` to the most recently active session and
 ---hand {node, path} to cb. Shared by :GirouxFeed and :GirouxQA.
 ---@param arg string|nil

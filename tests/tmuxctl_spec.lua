@@ -20,7 +20,14 @@ local function run_wrapper(args, env)
   fake("claude", "CLAUDE")
   fake("tmux", "TMUX")
   local wrapper = vim.fn.fnamemodify("scripts/claude-wrapper.zsh", ":p")
-  local script = ([[%s; export PATH="%s:$PATH"; source "%s"; claude %s]]):format(env or "true", dir, wrapper, args)
+  -- unset TMUX first so running the suite from inside tmux doesn't trip the
+  -- wrapper's in-tmux passthrough; the in-tmux case re-exports it via `env`.
+  local script = ([[unset TMUX; %s; export PATH="%s:$PATH"; source "%s"; claude %s]]):format(
+    env or "true",
+    dir,
+    wrapper,
+    args
+  )
   vim.system({ "zsh", "-c", script }, { text = true }):wait()
   local fh = io.open(log)
   local out = fh and fh:read("*a") or ""
@@ -99,6 +106,10 @@ return {
     log = run_wrapper("--dangerously-skip-permissions", "export GIROUX_WRAPPER_FORCE=1")
     assert(log:find("TMUX new%-session %-d %-s giroux/"), "must create a giroux session: " .. log)
     assert(log:find("GIROUX_SESSION_ID=%x%x%x%x%x%x%x%x"), "must inject the id: " .. log)
+    -- claude is sent as a FOREGROUND JOB into the session's interactive shell
+    -- (so C-z suspends it and `fg` resumes), not run as the pane command.
+    assert(log:find("TMUX send%-keys %-t giroux/"), "claude must be sent into the shell: " .. log)
+    assert(log:find("send%-keys.-claude.-Enter"), "the agent command runs as a job (…Enter): " .. log)
     assert(log:find("dangerously%-skip%-permissions"), "must forward args: " .. log)
     assert(log:find("TMUX set%-option"), "must style the session")
     assert(not log:find("CLAUDE "), "raw claude must NOT run in capture mode: " .. log)

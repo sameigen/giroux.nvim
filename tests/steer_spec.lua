@@ -15,14 +15,31 @@ return {
     assert(vim.base64.decode(b64) == "line one\nline 'two' with quotes\n$HOME stays literal")
   end,
 
-  ["dispatch: resume_cmd rebuilds a --resume launch with a fresh steer id"] = function()
+  ["steer: attach lets C-z through to suspend claude (now a shell job)"] = function()
+    local km = {}
+    for _, m in ipairs(steer.attach_keymaps()) do
+      km[m.lhs] = m.rhs
+    end
+    -- claude now runs as a job in an interactive shell, so ^Z suspends it to that
+    -- shell (work, then `fg`). The attach must NOT intercept C-z or it'd block
+    -- that — let it pass straight through to the pane.
+    assert(km["<C-z>"] == nil, "C-z must pass through to claude (suspends it to a shell)")
+    assert(km["<C-q>"] == "<C-\\><C-n>", "C-q leaves terminal mode for scroll/copy")
+    assert(km["<Esc>"] == "<Esc>", "Esc still belongs to the agent")
+  end,
+
+  ["dispatch: resume_cmd rebuilds a --resume launch as a shell job"] = function()
     local cmd = dispatch.resume_cmd("giroux/app-bb22", "bb22ffff", "/Users/dev/Code/app", "06df2f18-dead-beef")
     assert(cmd:find("tmux new%-session %-d %-s 'giroux/app%-bb22'"))
     assert(cmd:find("GIROUX_SESSION_ID=", 1, true) and cmd:find("bb22ffff", 1, true), "fresh steer id injected")
-    assert(cmd:find("--resume", 1, true), "passes --resume")
-    assert(cmd:find("06df2f18-dead-beef", 1, true), "resumes the original session id")
-    assert(cmd:find("dangerously-skip-permissions", 1, true), "flags applied")
     assert(cmd:find("-c '/Users/dev/Code/app'", 1, true), "in the session's cwd")
+    assert(cmd:find("tmux send%-keys %-t 'giroux/app%-bb22'.*Enter"), "agent run as a job in the shell")
+    -- the agent argv travels base64; decode it to verify --resume <id> + flags
+    local b64 = (cmd:match("printf %%s%s+(.-)%s+|%s+base64") or ""):gsub("[^A-Za-z0-9+/=]", "")
+    local decoded = vim.base64.decode(b64)
+    assert(decoded:find("--resume", 1, true), "passes --resume: " .. decoded)
+    assert(decoded:find("06df2f18-dead-beef", 1, true), "resumes the original session id")
+    assert(decoded:find("dangerously-skip-permissions", 1, true), "flags applied")
   end,
 
   ["dispatch: parse_reapable picks detached, long-idle giroux sessions"] = function()
@@ -42,6 +59,15 @@ return {
     assert(vim.tbl_contains(names, "giroux/app-a1") and vim.tbl_contains(names, "giroux/t/old-thing"))
     assert(not vim.tbl_contains(names, "giroux/web-b2"), "attached kept")
     assert(not vim.tbl_contains(names, "giroux/db-c3"), "fresh kept")
+  end,
+
+  ["dispatch: repo_label shows parent/name + recency, fuzzy-friendly"] = function()
+    local label = dispatch._repo_label({ path = "/Users/sam/Code/personal/2drs", mtime = os.time() - 7200 })
+    assert(label:find("personal/2drs", 1, true), "shows parent/name: " .. label)
+    assert(label:find("2h", 1, true), "shows a recency hint: " .. label)
+    -- no mtime -> just the short path, no trailing age
+    local bare = dispatch._repo_label({ path = "/srv/repos/hydra", mtime = 0 })
+    assert(bare:find("repos/hydra", 1, true) and not bare:find("%dm") and not bare:find("%dh"), "bare: " .. bare)
   end,
 
   ["steer: parse_question reads the live picker off a captured pane"] = function()
@@ -100,27 +126,31 @@ return {
     assert(q.options[5].label == "Chat about this")
   end,
 
-  ["dispatch: launch_cmd injects id, cwd, flags, styling"] = function()
+  ["dispatch: launch_cmd runs the agent as a shell job (id, cwd, styling)"] = function()
     local cmd = dispatch.launch_cmd("giroux/app-ab12", "ab12cd34", "/Users/dev/Code/app", 'review the "thing"')
     assert(cmd:find("tmux new%-session %-d %-s 'giroux/app%-ab12'"))
     assert(cmd:find("GIROUX_SESSION_ID=ab12cd34", 1, true) or cmd:find("GIROUX_SESSION_ID='ab12cd34'", 1, true))
     assert(cmd:find("-c '/Users/dev/Code/app'", 1, true))
-    assert(cmd:find("dangerously%-skip%-permissions"), "config.dispatch.flags applied")
-    assert(cmd:find('review the "thing"', 1, true), "prompt forwarded")
+    -- claude is NOT the pane command — it's sent as a foreground job so C-z
+    -- suspends it and `fg` resumes. The agent argv travels base64, so neither
+    -- "claude" nor the prompt appears literally (multiline-safe).
+    assert(cmd:find("tmux send%-keys %-t 'giroux/app%-ab12'.*Enter"), "agent sent as a job: " .. cmd)
+    assert(cmd:find("base64 %-d"), "agent argv travels base64")
+    assert(not cmd:find("claude", 1, true), "claude must not be a literal pane command (it's the base64 payload)")
+    assert(not cmd:find("thing", 1, true), "prompt must not appear literally")
     assert(cmd:find("set%-option .* mouse on"), "styled like the wrapper")
   end,
 
   ["dispatch: launch_cmd quoting survives real shell execution"] = function()
-    -- fake tmux executes the inner shell-command exactly like real tmux
-    -- (sh -c "$last_arg"); fake claude logs its argv. The prompt must arrive
-    -- byte-identical through both quoting layers.
+    -- fake tmux: new-session is a no-op (real tmux would start a shell);
+    -- send-keys runs the command it would type into that shell (the arg before
+    -- "Enter"), exactly like the interactive shell executing it. The prompt must
+    -- arrive byte-identical through shq + base64 + eval.
     local dir = vim.fn.tempname()
     vim.fn.mkdir(dir, "p")
     local log = dir .. "/log"
     local f = assert(io.open(dir .. "/tmux", "w"))
-    f:write(
-      ('#!/bin/sh\ncase "$1" in new-session)\n  for a in "$@"; do last="$a"; done\n  sh -c "$last";;\nesac\nexit 0\n'):format()
-    )
+    f:write('#!/bin/sh\ncase "$1" in send-keys) shift; sh -c "$3";; esac\nexit 0\n')
     f:close()
     local g = assert(io.open(dir .. "/claude", "w"))
     g:write(('#!/bin/sh\nfor a in "$@"; do printf "%%s\\n" "$a" >> "%s"; done\n'):format(log))
@@ -129,11 +159,7 @@ return {
 
     local nasty = [[don't "break" $HOME `quoting` \n ok]]
     local cmd = dispatch.launch_cmd("giroux/x-1111", "id12", "/tmp/x", nasty)
-    -- launch_cmd login-wraps the agent (${SHELL:-/bin/sh} -lc '…'); pin HOME and
-    -- SHELL so that login shell is deterministic and sources no real profile.
-    vim
-      .system({ "sh", "-c", ("HOME=%s SHELL=/bin/sh PATH=%s:$PATH; %s"):format(dir, dir, cmd) }, { text = true })
-      :wait()
+    vim.system({ "sh", "-c", ("PATH=%s:$PATH; %s"):format(dir, cmd) }, { text = true }):wait()
     local fh = assert(io.open(log))
     local args = vim.split(fh:read("*a"), "\n", { trimempty = true })
     fh:close()

@@ -59,6 +59,16 @@ function M.stream(host, cmd, on_chunk, on_exit)
   local stopped = false
   local proc
   proc = vim.system(M.argv(host, cmd), {
+    -- A LOCAL stream (host nil OR false — both are "local" in this codebase)
+    -- runs in its OWN process group (libuv setsid). That isolates it from nvim's
+    -- group so the merged-tail trap can `kill 0` to reap its backgrounded
+    -- `tail`/`awk` children on stop or disconnect without signalling nvim itself
+    -- (see multi_tail_cmd). The cost is that a detached child outlives a hard
+    -- nvim exit, so a VimLeavePre hook stops streams on quit. A REMOTE stream's
+    -- local process is just `ssh`; its trap runs on the far side in an
+    -- already-isolated group, reaped by the SIGHUP a dropped link delivers — so
+    -- no local detach is needed (or wanted: we kill the ssh).
+    detach = not host,
     stdout = function(_, data)
       if data and not stopped then
         vim.schedule(function()
@@ -93,19 +103,30 @@ end
 ---@param path string
 ---@param offset integer bytes already consumed
 function M.tail(host, path, offset, on_chunk, on_exit)
-  local cmd = ("tail -c +%d -F '%s' 2>/dev/null"):format(offset + 1, path)
+  -- `exec` so the shell REPLACES itself with tail instead of forking it: some
+  -- shells (dash) fork a single command, and then killing the shell on stop()
+  -- would orphan the child tail (`tail -F` never exits on its own). With exec
+  -- the tail IS the spawned process, so proc:kill (local) or the ssh dying
+  -- (remote → SIGHUP) reaps it cleanly.
+  local cmd = ("exec tail -c +%d -F '%s' 2>/dev/null"):format(offset + 1, path)
   return M.stream(host, cmd, on_chunk, on_exit)
 end
 
 ---One merged tail over many files: a single channel per node instead of one
 ---per session (sshd MaxSessions). Each remote line is `<path>\t<line>`; awk
 ---provides portable per-line flushing (BSD and GNU). The trap reaps the
----backgrounded tails when the connection drops or the stream is stopped —
----`jobs -p`, never `kill 0` (locally that would be nvim's process group).
+---backgrounded tails when the connection drops or the stream is stopped via
+---`kill 0` — the whole process group, the ONLY portable reap: a
+---non-interactive `dash` (Linux `/bin/sh`) has job control off, so `jobs -p`
+---is empty and a `kill $(jobs -p)` trap reaps nothing, orphaning every tail.
+---`kill 0` is safe because the shell runs in its OWN group: remotely sshd
+---isolates the command, and locally M.stream spawns it detached (setsid). A
+---bare `tail | awk` pipeline also needs the group kill — killing only awk
+---(`$!`) leaves the quiet `tail -F` writing nothing and never dying.
 ---@param files {path: string, offset: integer}[] offset = bytes already consumed
 ---@return string
 function M.multi_tail_cmd(files)
-  local parts = { "trap 'kill $(jobs -p) 2>/dev/null' EXIT HUP TERM INT;" }
+  local parts = { "trap 'kill 0 2>/dev/null' EXIT HUP TERM INT;" }
   for _, f in ipairs(files) do
     parts[#parts + 1] = ('tail -c +%d -F "%s" 2>/dev/null | awk -v p="%s" \'{ print p "\\t" $0; fflush() }\' &'):format(
       f.offset + 1,

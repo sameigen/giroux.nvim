@@ -137,4 +137,50 @@ return {
     assert(roster._line(it, "node"):find("loper", 1, true), "project still shown")
     assert(roster._line(it, "project"):find("gintoki", 1, true), "node shown when grouped by repo")
   end,
+
+  ["roster: heartbeat keeps the board live when no data changes"] = function()
+    local h = require("helpers")
+    h.skip_unless(h.is_unix(), "starts the monitor (local tail -F)")
+    local root = vim.fn.tempname()
+    local proj = root .. "/-Users-test-Code-app"
+    vim.fn.mkdir(proj, "p")
+    local f = proj .. "/dddddddd-0000-0000-0000-000000000001.jsonl"
+    local fh = assert(io.open(f, "a"))
+    fh:write(vim.json.encode({ type = "user", uuid = "u1", message = { role = "user", content = "hi" } }) .. "\n")
+    fh:close()
+
+    -- heartbeat every 1s; push liveness + discovery far out so that after the
+    -- first pass ONLY the heartbeat can repaint within the test window.
+    require("giroux").setup({
+      nodes = { fake = { host = false, claude_projects = root } },
+      refresh_interval = 1,
+      live_interval = 60,
+      discover_interval = 60,
+    })
+    roster.open("fake") -- scope to the fake node; never scan real ~/.claude
+    local function title()
+      local b = roster._state.buf
+      return (b and vim.api.nvim_buf_is_valid(b) and vim.api.nvim_buf_get_lines(b, 0, 1, false)[1]) or ""
+    end
+    assert(
+      vim.wait(8000, function()
+        return title():find("giroux · ", 1, true) ~= nil
+      end, 100),
+      "roster must do its first render: " .. title()
+    )
+    local first = title()
+    -- with no data event possible (live/discover at 60s), only the heartbeat can
+    -- change the title — its clock must advance within a couple of ticks.
+    assert(
+      vim.wait(3000, function()
+        return title() ~= first
+      end, 100),
+      "heartbeat must repaint the board without data churn; still: " .. first
+    )
+
+    vim.api.nvim_buf_delete(roster._state.buf, { force = true })
+    require("giroux.monitor").stop()
+    vim.fn.delete(root, "rf")
+    require("giroux").setup({})
+  end,
 }

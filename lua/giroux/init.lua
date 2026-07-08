@@ -2,6 +2,7 @@
 ---@field host string ssh destination (defaults to the node name; honors ~/.ssh/config)
 ---@field claude_projects string remote transcript root (default "~/.claude/projects")
 ---@field flags string[]|nil override launch flags for dispatches to this node
+---@field roots string[]|nil dirs scanned for repos when dispatching to THIS node (falls back to the global `roots`)
 
 ---@class giroux.DispatchConfig
 ---@field cmd string[] command to launch the agent, e.g. { "claude" }
@@ -24,8 +25,9 @@
 ---@field discover_tag string|nil only discover peers carrying this tailscale ACL tag (e.g. "tag:agent-host")
 ---@field tmux_rename boolean rename wrapper-minted tmux sessions to the transcript's ai-title
 ---@field roots string[] remote directories scanned for repos when dispatching
----@field refresh_interval integer seconds between roster auto-refreshes (0 disables)
----@field discover_interval integer seconds between monitor discovery passes (live tails fill the gaps)
+---@field refresh_interval integer seconds between roster display heartbeats — re-renders so the clock + age columns stay live even when no data changes (0 disables)
+---@field live_interval integer seconds between liveness polls (process truth + needs-you + tmux title spinner) between the heavier file-listing discoveries
+---@field discover_interval integer seconds between full discovery passes (file listing); live tails + liveness polls fill the gaps
 ---@field active_window integer minutes of transcript mtime considered "live" when scanning
 ---@field backfill integer events rendered when opening a feed (history above is parsed, not drawn)
 ---@field initial_tail integer bytes read from a session's tail on feed open (state proof is local to recent bytes)
@@ -43,7 +45,8 @@ M.defaults = {
   discover_tag = nil,
   tmux_rename = true,
   roots = { "~/Code" },
-  refresh_interval = 30,
+  refresh_interval = 1,
+  live_interval = 3,
   discover_interval = 10,
   active_window = 240,
   backfill = 4000,

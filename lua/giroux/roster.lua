@@ -266,11 +266,44 @@ function M.refresh()
   monitor.discover() -- force a discovery pass; live tails handle the rest
 end
 
+local function stop_heartbeat()
+  if state.tick then
+    state.tick:stop()
+    state.tick:close()
+    state.tick = nil
+  end
+end
+
+-- Re-render on a timer so the clock + age columns stay live even when no
+-- session data is changing. Without this the board only repaints on a monitor
+-- data event (the discovery tick), so a quiet roster *looks* frozen — the
+-- feel-stale bug. Pure-cheap: it just rebuilds the cached items locally.
+local function start_heartbeat()
+  stop_heartbeat()
+  local secs = require("giroux").config.refresh_interval or 0
+  if secs <= 0 then
+    return
+  end
+  state.tick = vim.uv.new_timer()
+  state.tick:start(
+    secs * 1000,
+    secs * 1000,
+    vim.schedule_wrap(function()
+      if state.buf and vim.api.nvim_buf_is_valid(state.buf) then
+        render(state.items, {})
+      else
+        stop_heartbeat()
+      end
+    end)
+  )
+end
+
 local function teardown()
   if state.unsub then
     state.unsub()
     state.unsub = nil
   end
+  stop_heartbeat()
 end
 
 ---@param arg string|nil node filter
@@ -325,6 +358,7 @@ function M.open(arg)
     vim.notify("giroux: grouped by " .. state.group_by)
   end, "cycle grouping")
   map(km.refresh, function()
+    vim.notify("giroux: refreshing…") -- instant feedback; discover() is async
     M.refresh()
   end, "refresh")
   map(km.stats or "S", function()
@@ -401,6 +435,7 @@ function M.open(arg)
     end
   end)
   monitor.start(opts)
+  start_heartbeat()
 end
 
 M._state = state

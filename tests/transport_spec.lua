@@ -11,11 +11,94 @@ return {
       { path = "/p/a.jsonl", offset = 0 },
       { path = "/p/b.jsonl", offset = 100 },
     })
-    assert(cmd:find("trap 'kill $(jobs -p)", 1, true), "must reap tails, never kill 0")
+    -- kill 0 (the whole group), not `kill $(jobs -p)`: non-interactive dash has
+    -- job control off so `jobs -p` is empty and reaps nothing (the Linux leak).
+    -- Safe because the shell runs in its own group (remote: sshd; local: setsid).
+    assert(cmd:find("trap 'kill 0", 1, true), "must reap the whole process group")
+    assert(not cmd:find("jobs -p", 1, true), "jobs -p is empty in non-interactive dash — must not rely on it")
     assert(cmd:find('tail -c +1 -F "/p/a.jsonl"', 1, true), "offset 0 -> byte 1")
     assert(cmd:find('tail -c +101 -F "/p/b.jsonl"', 1, true), "offset 100 -> byte 101")
     assert(cmd:find("fflush()", 1, true), "awk must flush per line")
     assert(cmd:find("wait$"), "foreground wait keeps the channel open")
+  end,
+
+  ["transport: stopping a local stream reaps its tail/awk (no orphans)"] = function()
+    h.skip_unless(h.is_unix() and h.has("ps"), "needs ps + tail -F (macOS or Linux)")
+    local root = vim.fn.tempname()
+    vim.fn.mkdir(root, "p")
+    local f = root .. "/reap-me.jsonl"
+    local fh = assert(io.open(f, "w"))
+    fh:write("{}\n")
+    fh:close()
+
+    -- count the live tail/awk processes still referencing our file. (The sh -c
+    -- wrapper line also matches while running; all must be gone after reap.)
+    local function procs_for_file()
+      local out = vim.system({ "ps", "-eo", "pid,command" }, { text = true }):wait()
+      local n = 0
+      for line in (out.stdout or ""):gmatch("[^\n]+") do
+        if line:find(f, 1, true) and (line:find("tail", 1, true) or line:find("awk", 1, true)) then
+          n = n + 1
+        end
+      end
+      return n
+    end
+
+    -- host = nil -> local stream; M.stream spawns it detached so the trap's
+    -- `kill 0` reaps the group on stop without signalling this nvim.
+    local stream = ssh.multi_tail(nil, { { path = f, offset = 0 } }, function() end, function() end)
+    assert(
+      vim.wait(4000, function()
+        return procs_for_file() >= 1
+      end, 50),
+      "the merged tail must actually spawn a tail for the file"
+    )
+    stream.stop()
+    assert(
+      vim.wait(4000, function()
+        return procs_for_file() == 0
+      end, 50),
+      "stop() must reap the tail/awk — none may survive (the leak this fixes)"
+    )
+    vim.fn.delete(root, "rf")
+  end,
+
+  ["transport: a single local tail is reaped on stop (exec, not fork)"] = function()
+    h.skip_unless(h.is_unix() and h.has("ps"), "needs ps + tail -F (macOS or Linux)")
+    local root = vim.fn.tempname()
+    vim.fn.mkdir(root, "p")
+    local f = root .. "/solo.jsonl"
+    local fh = assert(io.open(f, "w"))
+    fh:write("{}\n")
+    fh:close()
+    local function procs()
+      local out = vim.system({ "ps", "-eo", "command" }, { text = true }):wait()
+      local n = 0
+      for line in (out.stdout or ""):gmatch("[^\n]+") do
+        if line:find(f, 1, true) and line:find("tail", 1, true) then
+          n = n + 1
+        end
+      end
+      return n
+    end
+    -- host=false is the codebase's *other* "local" sentinel (tests, local node);
+    -- the feed's fallback tail uses this path. It must reap on stop, not orphan a
+    -- forked child.
+    local s = ssh.tail(false, f, 0, function() end, function() end)
+    assert(
+      vim.wait(4000, function()
+        return procs() >= 1
+      end, 50),
+      "tail must spawn"
+    )
+    s.stop()
+    assert(
+      vim.wait(4000, function()
+        return procs() == 0
+      end, 50),
+      "stop() must reap the single tail — none may survive"
+    )
+    vim.fn.delete(root, "rf")
   end,
 
   ["transport: demux reassembles split lines and routes by path"] = function()
