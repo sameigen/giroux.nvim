@@ -183,4 +183,99 @@ return {
     vim.fn.delete(root, "rf")
     require("giroux").setup({})
   end,
+
+  ["roster: subagents nest under their parent, attention-first"] = function()
+    local function sub(o)
+      return sess(vim.tbl_extend("force", {
+        is_subagent = true,
+        parent_id = "PARENT",
+        path = "/p/-x/PARENT/subagents/agent-" .. (o.agent_id or "z") .. ".jsonl",
+      }, o))
+    end
+    local items = {
+      sess({ path = "/p/-x/PARENT.jsonl", state = "●", title = "parent job" }),
+      sub({ agent_id = "a", state = "✓", agent_type = "Explore", title = "found it", mtime = 30 }),
+      sub({ agent_id = "b", state = "✗", agent_type = "code-reviewer", title = "verify", mtime = 90 }),
+    }
+    local r = roster.build(items, "repo", {})
+    -- title line counts the 1 real session, not the subagents
+    assert(r.lines[1]:find("1 session", 1, true), "one parent session: " .. r.lines[1])
+    -- the item rows, in order: parent, then its subagents attention-first (✗ before ✓)
+    local seq = {}
+    for _, row in ipairs(r.rows) do
+      if row.kind == "item" then
+        seq[#seq + 1] = row.item
+      end
+    end
+    assert(#seq == 3, "parent + 2 subagents are all item rows: " .. #seq)
+    assert(not seq[1].is_subagent and seq[1].title == "parent job", "parent renders first")
+    assert(seq[2].is_subagent and seq[2].state == "✗", "dead subagent nests first (attention)")
+    assert(seq[3].is_subagent and seq[3].state == "✓", "done subagent after")
+    -- header rolls up subagent attention: lead glyph ✗, badge counts the children
+    local header
+    for _, l in ipairs(r.lines) do
+      if l:find("^[▾▸]") then
+        header = l
+      end
+    end
+    assert(header and header:find("✗", 1, true), "header lead/badge shows the dead subagent: " .. tostring(header))
+  end,
+
+  ["roster: an orphan subagent (no parent in view) stands alone"] = function()
+    local items = {
+      sess({
+        is_subagent = true,
+        parent_id = "GONE",
+        path = "/p/-x/GONE/subagents/agent-a.jsonl",
+        state = "●",
+        title = "orphan work",
+      }),
+    }
+    local r = roster.build(items, "repo", {})
+    local items_shown = 0
+    for _, row in ipairs(r.rows) do
+      if row.kind == "item" then
+        items_shown = items_shown + 1
+      end
+    end
+    assert(items_shown == 1, "orphan subagent is still shown as a top-level row")
+    assert(r.lines[1]:find("1 session", 1, true), "orphan counts as a session when it has no parent")
+  end,
+
+  ["roster: a wide subagent fan-out is capped with an overflow row"] = function()
+    local items = { sess({ path = "/p/-x/PARENT.jsonl", state = "●", title = "fanout" }) }
+    for i = 1, 15 do
+      items[#items + 1] = sess({
+        is_subagent = true,
+        parent_id = "PARENT",
+        path = ("/p/-x/PARENT/subagents/agent-%02d.jsonl"):format(i),
+        state = "●",
+        agent_type = "general-purpose",
+        title = "task " .. i,
+        mtime = i,
+      })
+    end
+    local r = roster.build(items, "repo", {})
+    local subs, overflow = 0, false
+    for _, row in ipairs(r.rows) do
+      if row.kind == "item" and row.item.is_subagent then
+        subs = subs + 1
+      elseif row.kind == "more" then
+        overflow = true
+      end
+    end
+    assert(subs == 12, "shows the cap of 12 subagents, not all 15: " .. subs)
+    assert(overflow, "an overflow row summarizes the remaining 3")
+  end,
+
+  ["roster: a titleless session shows its prompt, not a raw UUID"] = function()
+    local it = sess({
+      path = "/p/-x/321d6e11-ca90-4ee6-b4ad-82544c811d91.jsonl",
+      title = nil,
+      last_prompt = "look at the failing sim test",
+    })
+    local line = roster._line(it, nil)
+    assert(line:find("look at the failing sim test", 1, true), "prompt used as the title: " .. line)
+    assert(not line:find("82544c811d91", 1, true), "the raw UUID tail is not shown")
+  end,
 }

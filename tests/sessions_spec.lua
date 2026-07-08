@@ -6,6 +6,25 @@ local function J(t)
 end
 
 return {
+  ["sessions: subagent_of splits a subagent path into parent + agent id"] = function()
+    local p = "/r/-home-ko-Code-app/PARENTSID/subagents/agent-a7a728f1.jsonl"
+    local s = sessions.subagent_of(p)
+    assert(s and s.parent_id == "PARENTSID", "parent id: " .. vim.inspect(s))
+    assert(s.agent_id == "a7a728f1", "agent id: " .. vim.inspect(s))
+    assert(sessions.subagent_of("/r/-home-ko-Code-app/PARENTSID.jsonl") == nil, "top-level is not a subagent")
+    assert(
+      sessions.subagent_of("/r/-home-ko-Code-app/S/workflows/wf_x/agent-1.jsonl") == nil,
+      "a workflow file is not a subagents/ file"
+    )
+  end,
+
+  ["sessions: project_display resolves a subagent to its parent's repo"] = function()
+    local parent = "/r/-home-ko-Code-personal-fortunemill/SID.jsonl"
+    local sub = "/r/-home-ko-Code-personal-fortunemill/SID/subagents/agent-x.jsonl"
+    assert(sessions.project_display(sub) == sessions.project_display(parent), "subagent shares the parent's project")
+    assert(sessions.project_display(sub) == "~/Code/personal/fortunemill", sessions.project_display(sub))
+  end,
+
   ["sessions: state proofs"] = function()
     assert(sessions.derive_state({}, 10) == "○")
     assert(sessions.derive_state({}, 7200) == "~")
