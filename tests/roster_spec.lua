@@ -278,4 +278,40 @@ return {
     assert(line:find("look at the failing sim test", 1, true), "prompt used as the title: " .. line)
     assert(not line:find("82544c811d91", 1, true), "the raw UUID tail is not shown")
   end,
+
+  ["roster: _line shows todos in the info column, ahead of activity/last_prompt"] = function()
+    local it = sess({ todos = { total = 5, done = 2, in_progress = 1, current = "fix the flaky test" } })
+    local line = roster._line(it, nil)
+    assert(line:find("todos 2/5", 1, true), "todo count shown: " .. line)
+    assert(line:find("fix the flaky test", 1, true), "current task shown: " .. line)
+  end,
+
+  ["roster: _line still prioritizes waiting/busy over todos"] = function()
+    local waiting = sess({ state = "?", waiting_for = "pick an option", todos = { total = 3, done = 1 } })
+    assert(roster._line(waiting, nil):find("waiting: pick an option", 1, true), "waiting wins over todos")
+    local busy = sess({ pending = { "Bash" }, todos = { total = 3, done = 1 } })
+    assert(roster._line(busy, nil):find("busy: Bash", 1, true), "busy wins over todos")
+  end,
+
+  ["roster: _line appends compact badges for queued/mode/high-context"] = function()
+    local it = sess({ queued = 3, mode = "plan", ctx_pct = 85 })
+    local line = roster._line(it, nil)
+    assert(line:find("⧗3", 1, true), "queued badge: " .. line)
+    assert(line:find("PLAN", 1, true), "plan-mode badge: " .. line)
+    assert(line:find("ctx85%", 1, true), "high-context badge: " .. line)
+  end,
+
+  ["roster: _line omits mode/ctx badges for the common/boring cases"] = function()
+    local common = sess({ mode = "bypassPermissions", ctx_pct = 30 })
+    local line = roster._line(common, nil)
+    assert(not line:find("bypassPermissions", 1, true), "no badge for the default launch mode: " .. line)
+    assert(not line:find("ctx30", 1, true), "no badge below the high-context threshold: " .. line)
+    local zero_queued = sess({ queued = 0 })
+    assert(not roster._line(zero_queued, nil):find("⧗", 1, true), "no badge for a queue of 0")
+  end,
+
+  ["roster: _line shows acceptEdits/auto mode tags too"] = function()
+    assert(roster._line(sess({ mode = "acceptEdits" }), nil):find("edits", 1, true))
+    assert(roster._line(sess({ mode = "auto" }), nil):find("auto", 1, true))
+  end,
 }

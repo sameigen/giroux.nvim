@@ -7,6 +7,7 @@ local ssh = require("giroux.ssh")
 local nodes = require("giroux.nodes")
 local transcript = require("giroux.transcript")
 local stats = require("giroux.stats")
+local todos = require("giroux.todos")
 
 local M = {}
 
@@ -31,6 +32,11 @@ M.TAIL_BYTES = 32768
 ---@field agent_type string|nil subagent type, e.g. "general-purpose" (from .meta.json)
 ---@field description string|nil the task the subagent was dispatched with (.meta.json)
 ---@field spawn_depth integer|nil nesting depth (1 = spawned by the top-level session)
+---@field todos {total: integer, done: integer, in_progress: integer, current: string|nil}|nil live todo-list summary (giroux.todos)
+---@field queued integer|nil count of queued (typed-ahead) inputs not yet resolved
+---@field ctx_pct integer|nil context-window pressure, 0-100 (giroux.stats)
+---@field model string|nil most recent model id used this session
+---@field mode string|nil permission mode (plan|acceptEdits|auto|bypassPermissions|default)
 
 ---State proof from parser pending-set + turn-in-flight + transcript age
 ---(DESIGN.md §4). WORKING is proven by either an unresolved tool_use OR an
@@ -56,6 +62,27 @@ function M.derive_state(pending, age_sec, in_turn)
     return age_sec <= 1800 and "●" or "✗"
   end
   return age_sec <= 3600 and "○" or "~"
+end
+
+---Fold one `queue` event's operation into a running count of pending queued
+---inputs. Pure. Real op vocabulary (verified against live ~/.claude/projects
+---transcripts, 2026-07-08): "enqueue" adds one; "remove" and "dequeue" each
+---resolve exactly one — floored at 0, since a resolve for an item enqueued
+---before this tracker's seed window must never go negative; "popAll" drains
+---the whole queue. Any other/unknown op is left alone: never crash, never
+---guess (the parser's "degrade unknowns" contract).
+---@param count integer current queued count
+---@param op string|nil the queue event's `op` field
+---@return integer
+function M.fold_queue(count, op)
+  if op == "enqueue" then
+    return count + 1
+  elseif op == "remove" or op == "dequeue" then
+    return math.max(0, count - 1)
+  elseif op == "popAll" then
+    return 0
+  end
+  return count
 end
 
 ---Split a subagent transcript path into its parent id + own agent id, or nil
@@ -97,7 +124,7 @@ end
 ---@return giroux.Session[]
 function M.parse_scan(node_name, stdout, now)
   local out = {}
-  local cur, parser, acc, skipped_partial
+  local cur, parser, acc, todo_acc, queued, skipped_partial
   local function finish()
     if not cur then
       return
@@ -109,6 +136,12 @@ function M.parse_scan(node_name, stdout, now)
     cur.state = M.derive_state(parser:pending(), now - cur.mtime, parser:in_turn())
     cur.activity = acc:recent_line()
     cur.touched = acc.recent_files[#acc.recent_files]
+    local todo_sum = todo_acc:summary()
+    cur.todos = (todo_sum.total or 0) > 0 and todo_sum or nil
+    cur.queued = queued > 0 and queued or nil
+    local sum = acc:summary()
+    cur.ctx_pct = sum.ctx_pct
+    cur.model = sum.model
     out[#out + 1] = cur
   end
   for line in vim.gsplit(stdout, "\n", { plain = true }) do
@@ -125,6 +158,8 @@ function M.parse_scan(node_name, stdout, now)
       }
       parser = transcript.parser()
       acc = stats.new()
+      todo_acc = todos.new()
+      queued = 0
       -- tail -c of a big file starts mid-record; drop the first (partial) line
       skipped_partial = cur.size <= M.TAIL_BYTES
     elseif cur and line ~= "" then
@@ -133,14 +168,19 @@ function M.parse_scan(node_name, stdout, now)
       else
         for _, e in ipairs(parser:feed(line .. "\n")) do
           acc:add(e)
+          todo_acc:add(e)
           if e.kind == "session_meta" then
             if e.key == "ai-title" then
               cur.title = e.value
             elseif e.key == "last-prompt" then
               cur.last_prompt = e.value
+            elseif e.key == "permission-mode" then
+              cur.mode = e.value
             end
           elseif e.kind == "user_text" then
             cur.last_prompt = e.text:match("^[^\n]*")
+          elseif e.kind == "queue" then
+            queued = M.fold_queue(queued, e.op)
           end
         end
       end

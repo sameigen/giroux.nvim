@@ -160,4 +160,81 @@ return {
     assert(#items == 1)
     assert(items[1].state == "○", "fragment must be dropped, not poison the parse: " .. items[1].state)
   end,
+
+  ["sessions: fold_queue tallies enqueue/remove/dequeue/popAll, ignores unknown ops"] = function()
+    local n = 0
+    n = sessions.fold_queue(n, "enqueue") -- 1
+    n = sessions.fold_queue(n, "enqueue") -- 2
+    n = sessions.fold_queue(n, "dequeue") -- 1
+    assert(n == 1, "enqueue x2, dequeue x1: " .. n)
+    n = sessions.fold_queue(n, "remove") -- 0
+    assert(n == 0, "remove floors correctly: " .. n)
+    n = sessions.fold_queue(n, "remove") -- must not go negative
+    assert(n == 0, "remove below 0 stays at 0: " .. n)
+    n = sessions.fold_queue(3, "popAll")
+    assert(n == 0, "popAll drains to 0: " .. n)
+    assert(sessions.fold_queue(5, "reorder") == 5, "unknown op is a no-op, not a guess")
+  end,
+
+  ["sessions: parse_scan threads mode + queued from real event shapes"] = function()
+    local now = os.time()
+    local lines = {
+      J({ type = "permission-mode", permissionMode = "plan", sessionId = "s1" }),
+      J({ type = "queue-operation", operation = "enqueue", timestamp = "2026-07-08T00:00:00.000Z", content = "next" }),
+      J({ type = "queue-operation", operation = "enqueue", timestamp = "2026-07-08T00:00:01.000Z", content = "next2" }),
+      J({ type = "queue-operation", operation = "dequeue", timestamp = "2026-07-08T00:00:02.000Z" }),
+    }
+    local stdout = table.concat({
+      ("===GIROUX=== %d 500 %d /p/-Users-dev-Code-app/s1.jsonl"):format(now - 5, now - 60),
+      table.concat(lines, "\n"),
+      "",
+    }, "\n")
+    local items = sessions.parse_scan("workhorse", stdout, now)
+    assert(#items == 1)
+    assert(items[1].mode == "plan", "permission-mode threaded: " .. vim.inspect(items[1].mode))
+    assert(items[1].queued == 1, "2 enqueue - 1 dequeue = 1: " .. tostring(items[1].queued))
+  end,
+
+  ["sessions: parse_scan threads todos/ctx_pct/model from the accumulator summaries"] = function()
+    -- stub the accumulators so this proves parse_scan's WIRING, not 02/03's
+    -- fold correctness (that's their own spec files' job).
+    local todos_mod = require("giroux.todos")
+    local orig_todos_new = todos_mod.new
+    todos_mod.new = function()
+      return {
+        add = function() end,
+        summary = function()
+          return { total = 4, done = 1, in_progress = 1, current = "fix the thing" }
+        end,
+      }
+    end
+    local stats = require("giroux.stats")
+    local orig_stats_new = stats.new
+    stats.new = function()
+      local acc = orig_stats_new()
+      local orig_summary = acc.summary
+      acc.summary = function(self)
+        local s = orig_summary(self)
+        s.ctx_pct = 62
+        s.model = "claude-fake-model"
+        return s
+      end
+      return acc
+    end
+
+    local now = os.time()
+    local stdout = ("===GIROUX=== %d 500 %d /p/-Users-dev-Code-app/s1.jsonl"):format(now - 5, now - 60) .. "\n"
+    local items = sessions.parse_scan("workhorse", stdout, now)
+
+    todos_mod.new = orig_todos_new
+    stats.new = orig_stats_new
+
+    assert(#items == 1)
+    assert(
+      vim.deep_equal(items[1].todos, { total = 4, done = 1, in_progress = 1, current = "fix the thing" }),
+      vim.inspect(items[1].todos)
+    )
+    assert(items[1].ctx_pct == 62, "ctx_pct threaded: " .. tostring(items[1].ctx_pct))
+    assert(items[1].model == "claude-fake-model", "model threaded: " .. tostring(items[1].model))
+  end,
 }

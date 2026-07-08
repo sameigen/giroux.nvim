@@ -2,6 +2,7 @@ local monitor = require("giroux.monitor")
 local sessions = require("giroux.sessions")
 local transcript = require("giroux.transcript")
 local stats = require("giroux.stats")
+local todos = require("giroux.todos")
 require("giroux").setup({})
 
 -- monitor's live path is integration-tested headlessly (live_roster_test.lua);
@@ -74,6 +75,8 @@ return {
     local tr = {
       session = { node = "x", path = "/a/sess.jsonl", state = "·", mtime = os.time() },
       acc = stats.new(),
+      todos = todos.new(),
+      queued = 0,
       parser = transcript.parser(),
       question = false,
     }
@@ -114,6 +117,8 @@ return {
       return {
         session = { node = "x", path = path, state = "·", mtime = os.time() - age },
         acc = stats.new(),
+        todos = todos.new(),
+        queued = 0,
         parser = transcript.parser(),
         question = question,
       }
@@ -154,6 +159,8 @@ return {
           is_subagent = is_sub or nil,
         },
         acc = stats.new(),
+        todos = todos.new(),
+        queued = 0,
         parser = transcript.parser(),
       }
       -- a user message opens a turn that never closes → in_turn = true
@@ -170,6 +177,70 @@ return {
     monitor._derive(sub, false)
     assert(sub.session.state ~= "✗", "a subagent is never dead: " .. sub.session.state)
     assert(sub.session.state == "○", "a silent subagent settles to idle: " .. sub.session.state)
+
+    require("giroux.notify").reset()
+  end,
+
+  ["monitor: derive threads todos/queued/ctx/model/mode onto tr.session"] = function()
+    require("giroux.notify").reset()
+    local todos_mod = require("giroux.todos")
+    local tr = {
+      session = { node = "x", path = "/a/sess.jsonl", state = "·", mtime = os.time(), mode = "plan" },
+      acc = stats.new(),
+      todos = todos_mod.new(),
+      queued = 2,
+      parser = transcript.parser(),
+      question = false,
+    }
+    -- stub this tracker's own accumulators (proves monitor's wiring, not
+    -- todos.lua/stats.lua's own fold correctness — they own their own specs).
+    tr.todos.summary = function()
+      return { total = 5, done = 2, in_progress = 1, current = "ship the roster badges" }
+    end
+    local orig_summary = tr.acc.summary
+    tr.acc.summary = function(self)
+      local s = orig_summary(self)
+      s.ctx_pct = 88
+      s.model = "claude-fake-model"
+      return s
+    end
+
+    monitor._derive(tr, false)
+
+    assert(
+      vim.deep_equal(tr.session.todos, { total = 5, done = 2, in_progress = 1, current = "ship the roster badges" }),
+      vim.inspect(tr.session.todos)
+    )
+    assert(tr.session.queued == 2, "queued threaded: " .. tostring(tr.session.queued))
+    assert(tr.session.ctx_pct == 88, "ctx_pct threaded: " .. tostring(tr.session.ctx_pct))
+    assert(tr.session.model == "claude-fake-model", "model threaded: " .. tostring(tr.session.model))
+    assert(
+      tr.session.mode == "plan",
+      "mode passthrough (set in feed_line, untouched by derive): " .. tostring(tr.session.mode)
+    )
+
+    require("giroux.notify").reset()
+  end,
+
+  ["monitor: feed_line folds a permission-mode record and queue-operations onto the tracker"] = function()
+    require("giroux.notify").reset()
+    local tr = {
+      session = { node = "x", path = "/a/sess.jsonl", state = "·", mtime = os.time() },
+      acc = stats.new(),
+      todos = require("giroux.todos").new(),
+      queued = 0,
+      parser = transcript.parser(),
+      live_after = 0,
+      question = false,
+    }
+    -- feed_line is file-local (like derive was before plan 001 added
+    -- `M._derive`); drive it through the new `M._feed_line` seam added just
+    -- below this test block.
+    monitor._feed_line(tr, vim.json.encode({ type = "permission-mode", permissionMode = "acceptEdits" }))
+    monitor._feed_line(tr, vim.json.encode({ type = "queue-operation", operation = "enqueue", content = "a" }))
+    monitor._feed_line(tr, vim.json.encode({ type = "queue-operation", operation = "enqueue", content = "b" }))
+    assert(tr.session.mode == "acceptEdits", "mode set directly in feed_line: " .. tostring(tr.session.mode))
+    assert(tr.queued == 2, "two enqueues tallied on the tracker: " .. tostring(tr.queued))
 
     require("giroux.notify").reset()
   end,

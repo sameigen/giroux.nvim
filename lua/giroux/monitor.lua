@@ -8,6 +8,7 @@ local nodes = require("giroux.nodes")
 local transcript = require("giroux.transcript")
 local stats = require("giroux.stats")
 local sessions = require("giroux.sessions")
+local todos = require("giroux.todos")
 local vocab = require("giroux.state")
 
 local M = {}
@@ -164,6 +165,12 @@ local function derive(tr, live)
   for _, c in pairs(tr.parser:pending()) do
     tr.session.pending[#tr.session.pending + 1] = c.name
   end
+  local todo_sum = tr.todos:summary()
+  tr.session.todos = (todo_sum.total or 0) > 0 and todo_sum or nil
+  tr.session.queued = tr.queued > 0 and tr.queued or nil
+  local acc_summary = tr.acc:summary()
+  tr.session.ctx_pct = acc_summary.ctx_pct
+  tr.session.model = acc_summary.model
 
   -- subagents surface their state nested under the parent on the roster, but
   -- don't page: a workflow fanning out 16 agents shouldn't fire 16 "finished"
@@ -216,6 +223,7 @@ local function feed_line(tr, line)
   local cfg = require("giroux").config
   for _, e in ipairs(tr.parser:feed(line .. "\n")) do
     tr.acc:add(e)
+    tr.todos:add(e)
     -- any fresh byte clears a stale question latch; a still-open one is
     -- re-confirmed by the next probe tick.
     tr.question = false
@@ -227,9 +235,13 @@ local function feed_line(tr, line)
         end
       elseif e.key == "last-prompt" then
         tr.session.last_prompt = e.value
+      elseif e.key == "permission-mode" then
+        tr.session.mode = e.value
       end
     elseif e.kind == "user_text" then
       tr.session.last_prompt = e.text:match("^[^\n]*")
+    elseif e.kind == "queue" then
+      tr.queued = sessions.fold_queue(tr.queued, e.op)
     end
     local wire = require("giroux.stats").tripwire(e, cfg.tripwires or {})
     if wire then
@@ -309,6 +321,8 @@ local function start_tracker(s)
   state.trackers[k] = {
     session = vim.tbl_extend("force", s, { state = "·", pending = {}, activity = "" }),
     acc = stats.new(),
+    todos = todos.new(),
+    queued = 0,
     parser = transcript.parser({ start_offset = from }),
     -- a mid-file start (from > 0) begins inside a record; drop that fragment.
     skip_partial = from > 0,
@@ -609,4 +623,5 @@ end
 
 M._state = state
 M._derive = derive
+M._feed_line = feed_line
 return M

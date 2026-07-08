@@ -12,6 +12,7 @@ local modules = {
   "giroux.steer",
   "giroux.dispatch",
   "giroux.stats",
+  "giroux.todos",
   "giroux.qa",
   "giroux.statsheet",
   "giroux.health",

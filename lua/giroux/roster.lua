@@ -106,6 +106,11 @@ local function group_key(it, group_by)
   return STATE_NAMES[it.state] or "?"
 end
 
+-- context usage past this threshold is worth flagging on the roster — Claude
+-- Code auto-compacts well above it, so this is an early warning, not a
+-- crisis. Tune here if it's too chatty/quiet in practice.
+local CTX_HIGH_PCT = 70
+
 ---One session line, indented under its group; the grouping dimension's own
 ---column is dropped (redundant under the header).
 ---@param it giroux.Session
@@ -116,6 +121,13 @@ function M._line(it, hide)
     info = "waiting: " .. it.waiting_for
   elseif #(it.pending or {}) > 0 then
     info = "busy: " .. table.concat(it.pending, ", ")
+  elseif it.todos then
+    -- the todo panel is a higher-signal "what's actually happening" than raw
+    -- tool-call tallies, so it takes the activity/last_prompt tier's slot.
+    info = ("todos %d/%d"):format(it.todos.done or 0, it.todos.total or 0)
+    if it.todos.current and it.todos.current ~= "" then
+      info = info .. " · " .. it.todos.current
+    end
   elseif it.activity and it.activity ~= "" then
     info = it.activity
     if it.touched then
@@ -137,6 +149,31 @@ function M._line(it, hide)
   cols[#cols + 1] = trunc(display_title(it), 34)
   cols[#cols + 1] = ("%4s"):format(age_str(it.mtime))
   cols[#cols + 1] = trunc(info, 44)
+  -- compact badges, appended un-truncated (never swallowed by the info
+  -- column's 44-char cap): queued input count, permission mode (plan
+  -- especially — a session sitting in plan mode is effectively waiting on
+  -- the human even though nothing in the transcript proves it, so it's
+  -- flagged even though its state glyph stays whatever's actually proven),
+  -- context usage. "default"/"bypassPermissions" (the common case — DESIGN
+  -- §2's default launch flag) get no badge: badges are for the modes that
+  -- are a deviation worth a second look.
+  local badges = {}
+  if it.queued and it.queued > 0 then
+    badges[#badges + 1] = "⧗" .. it.queued
+  end
+  if it.mode == "plan" then
+    badges[#badges + 1] = "PLAN"
+  elseif it.mode == "acceptEdits" then
+    badges[#badges + 1] = "edits"
+  elseif it.mode == "auto" then
+    badges[#badges + 1] = "auto"
+  end
+  if it.ctx_pct and it.ctx_pct >= CTX_HIGH_PCT then
+    badges[#badges + 1] = ("ctx%d%%"):format(it.ctx_pct)
+  end
+  if #badges > 0 then
+    cols[#cols + 1] = table.concat(badges, " ")
+  end
   return "  " .. table.concat(cols, " ")
 end
 
@@ -514,7 +551,8 @@ function M.open(arg)
   map(km.help, function()
     vim.notify(
       "⏎ feed / fold · ^S regroup · n dispatch · a attach · s steer · R resume · S stats · Q digest · r refresh · q close"
-        .. "  ·  ▸ = steerable, blank = observe-only  ·  ⤷ = subagent  ·  ✓ = done (finished, unreviewed)",
+        .. "  ·  ▸ = steerable, blank = observe-only  ·  ⤷ = subagent  ·  ✓ = done (finished, unreviewed)"
+        .. "  ·  ⧗N = N queued inputs  ·  PLAN/edits/auto = permission mode  ·  ctxNN% = context usage (high)",
       vim.log.levels.INFO
     )
   end, "help")
