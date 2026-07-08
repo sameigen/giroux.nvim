@@ -1,0 +1,2 @@
+{"type":"user","timestamp":"2026-07-08T15:00:00.000Z","uuid":"wu1","message":{"content":"run the workflow step"},"promptSource":"typed"}
+{"type":"assistant","timestamp":"2026-07-08T15:00:01.000Z","uuid":"wa1","message":{"id":"msg_wa1","model":"claude-basic","content":[{"type":"text","text":"step complete"}],"stop_reason":"end_turn","usage":{"input_tokens":3,"output_tokens":2,"cache_read_input_tokens":0,"cache_creation_input_tokens":0}}}

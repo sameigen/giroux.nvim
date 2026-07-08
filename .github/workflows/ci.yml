@@ -58,3 +58,5 @@ jobs:
         run: nvim --headless --clean --cmd "set rtp+=." -l scripts/smoke.lua
       - name: specs
         run: nvim --headless --clean --cmd "set rtp+=." -l tests/run.lua
+      - name: gauntlet (parser survives the fixture corpus)
+        run: nvim --headless --clean --cmd "set rtp+=." -l scripts/gauntlet.lua tests/fixtures/transcripts

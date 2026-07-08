@@ -1,0 +1,24 @@
+{"type":"mode","mode":"default"}
+{"type":"permission-mode","permissionMode":"acceptEdits"}
+{"type":"last-prompt","lastPrompt":"please run the tests"}
+{"type":"agent-name","agentName":"giroux-bot"}
+{"type":"pr-link","prUrl":"https://example.com/pr/1"}
+{"type":"queue-operation","timestamp":"2026-07-08T14:00:00.000Z","operation":"enqueue","content":"run lint next"}
+{"type":"attachment","timestamp":"2026-07-08T14:00:01.000Z","uuid":"att1","attachment":{"type":"queued_command","prompt":"run lint next"}}
+{"type":"attachment","timestamp":"2026-07-08T14:00:02.000Z","uuid":"att2","attachment":{"type":"file_reference","path":"/tmp/example.md"}}
+{"type":"file-history-snapshot"}
+{"type":"future-record-kind","payload":{"note":"forward-compat placeholder"}}
+{"type":"user","timestamp":"2026-07-08T14:00:03.000Z","uuid":"u20","message":{"content":"<local-command-caveat>caveat text</local-command-caveat>"},"isMeta":true}
+{"type":"user","timestamp":"2026-07-08T14:00:04.000Z","uuid":"u21","message":{"content":[{"type":"text","text":"<bash-input>echo hi</bash-input>"}]}}
+{"type":"user","timestamp":"2026-07-08T14:00:05.000Z","uuid":"u22","message":{"content":[{"type":"text","text":"[Request interrupted by user]"}]},"interruptedMessageId":"a-prior-msg"}
+{"type":"user","timestamp":"2026-07-08T14:00:06.000Z","uuid":"u23","message":{"content":"session summary: nothing notable happened"},"isCompactSummary":true}
+{"type":"user","timestamp":"2026-07-08T14:00:07.000Z","uuid":"u24","message":{"content":[{"type":"image","source":{"type":"base64","media_type":"image/png","data":"cGxhY2Vob2xkZXI="}}]}}
+{"type":"assistant","timestamp":"2026-07-08T14:00:08.000Z","uuid":"a20","isApiErrorMessage":true,"message":{"id":"msg_20","model":"claude-basic","content":[{"type":"text","text":"overloaded, retrying"}]}}
+{"type":"assistant","timestamp":"2026-07-08T14:00:09.000Z","uuid":"a21","message":{"id":"msg_21","model":"claude-basic","content":[{"type":"text","text":"revised answer"}]},"supersedesUuids":["a20"]}
+{"type":"assistant","timestamp":"2026-07-08T14:00:10.000Z","uuid":"a22","message":{"id":"msg_22","model":"claude-basic","content":[{"type":"fallback","text":"unsupported block"}]}}
+{"type":"system","subtype":"api_error","timestamp":"2026-07-08T14:00:11.000Z","error":{"message":"rate limited","code":429},"retryInMs":2000,"retryAttempt":1}
+{"type":"system","subtype":"away_summary","timestamp":"2026-07-08T14:00:12.000Z","content":"while away: fixed a typo"}
+{"type":"system","subtype":"compact_boundary","timestamp":"2026-07-08T14:00:13.000Z","compactMetadata":{"trigger":"auto","preTokens":50000,"postTokens":5000}}
+{"type":"system","subtype":"model_refusal_fallback","timestamp":"2026-07-08T14:00:14.000Z","retractedMessageUuids":["a21"]}
+{"type":"system","subtype":"stop_hook_summary","timestamp":"2026-07-08T14:00:15.000Z","content":"stop hook ran"}
+{"type":"assistant","timestamp":"2026-07-08T14:00:16.000Z","uuid":"a23","isSidechain":true,"agentId":"agent-side-1","message":{"id":"msg_23","model":"claude-basic","content":[{"type":"text","text":"sidechain note"}],"stop_reason":"end_turn"}}

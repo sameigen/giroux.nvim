@@ -22,7 +22,8 @@ nvim -l scripts/gauntlet.lua ~/.claude/projects   # stream real transcripts, pro
 stylua --check lua/ tests/     # formatting (run `stylua lua/ tests/` to fix)
 ```
 
-CI runs stylua + smoke + the specs on Linux (stable/nightly) and macOS.
+CI runs stylua + smoke + the specs + the gauntlet (against a committed fixture
+corpus, `tests/fixtures/transcripts/`) on Linux (stable/nightly) and macOS.
 Integration specs that need `zsh` or BSD `stat` skip themselves off-platform —
 see `tests/helpers.lua` (`skip_unless`).
 
