@@ -93,17 +93,46 @@ function M.classify(entry)
   return nil
 end
 
----Fetch the live agent map for a node. cb(map) on the main loop; {} on any
----failure. Login-wrapped so `claude` resolves and authenticates over ssh.
+local cache = {} ---@type table<string, {at: integer, map: table<string, giroux.AgentEntry>, available: boolean}>
+local inflight = {} ---@type table<string, fun(map: table, available: boolean)[]> callbacks awaiting one exec
+
+---Drop a node's cached agent map (tests).
 ---@param node_name string
----@param cb fun(map: table<string, giroux.AgentEntry>)
+function M.invalidate(node_name)
+  cache[node_name] = nil
+end
+
+---Fetch the live agent map for a node. cb(map, available) on the main loop;
+---({}, false) on any failure — `available` distinguishes "the command works
+---and reports no/other agents" (an empty-but-authoritative map correlation
+---may trust) from "the command is missing/broken" (callers must not treat
+---absence as proof). Cached briefly: the monitor, correlation, and the pane
+---prober all read this every tick and must share one exec, not race three.
+---Login-wrapped so `claude` resolves and authenticates over ssh.
+---@param node_name string
+---@param cb fun(map: table<string, giroux.AgentEntry>, available: boolean)
 function M.list(node_name, cb)
+  local c = cache[node_name]
+  if c and os.time() - c.at < 3 then
+    return cb(c.map, c.available)
+  end
   local _, node = nodes.get(node_name)
   if not node then
-    return cb({})
+    return cb({}, false)
   end
+  if inflight[node_name] then
+    inflight[node_name][#inflight[node_name] + 1] = cb
+    return
+  end
+  inflight[node_name] = { cb }
   ssh.exec(node.host, "claude agents --json 2>/dev/null", function(ok, stdout)
-    cb(ok and M.parse(stdout) or {})
+    local map = ok and M.parse(stdout) or {}
+    cache[node_name] = { at = os.time(), map = map, available = ok }
+    local waiting = inflight[node_name] or {}
+    inflight[node_name] = nil
+    for _, fn in ipairs(waiting) do
+      fn(map, ok)
+    end
   end, { login = true })
 end
 

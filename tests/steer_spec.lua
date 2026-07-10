@@ -7,8 +7,10 @@ return {
     local cmd = steer.send_cmd("giroux/t/fix-it", "line one\nline 'two' with quotes\n$HOME stays literal")
     assert(cmd:find("base64 %-d"), "text must travel base64")
     assert(cmd:find("tmux load%-buffer"), "must use paste-buffer, not send-keys text")
-    assert(cmd:find("paste%-buffer %-d %-b giroux%-steer %-t 'giroux/t/fix%-it'"))
-    assert(cmd:find("send%-keys %-t 'giroux/t/fix%-it' Enter$"), "submit with Enter")
+    -- `=` pins tmux -t to an EXACT session name: without it tmux prefix-matches
+    -- and the keys can land in a sibling like giroux/t/fix-it-again
+    assert(cmd:find("paste%-buffer %-d %-b giroux%-steer %-t '=giroux/t/fix%-it'"))
+    assert(cmd:find("send%-keys %-t '=giroux/t/fix%-it' Enter$"), "submit with Enter")
     assert(not cmd:find("line one"), "raw text must not appear in the shell command")
     -- the payload round-trips
     local b64 = cmd:match("printf '%%s' '([^']+)'")

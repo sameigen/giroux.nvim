@@ -17,26 +17,29 @@ end
 
 ---Shell command that types `text` into a tmux session's input box and
 ---submits it. Multiline-safe: the text travels base64 through paste-buffer,
----so nothing is interpreted as keys. Exposed for tests.
+---so nothing is interpreted as keys. The `=`-pinned target is non-negotiable:
+---tmux -t prefix-matches otherwise, and a renamed sibling session sharing a
+---name prefix would receive the keys. Exposed for tests.
 ---@param target string tmux session name
 ---@param text string
 ---@return string
 function M.send_cmd(target, text)
   local b64 = vim.base64.encode(text)
+  local t = shq(tmuxctl.exact(target))
   return ("printf '%%s' %s | base64 -d | tmux load-buffer -b giroux-steer - && tmux paste-buffer -d -b giroux-steer -t %s && tmux send-keys -t %s Enter"):format(
     shq(b64),
-    shq(target),
-    shq(target)
+    t,
+    t
   )
 end
 
 ---Resolve a roster/feed session to its tmux target, or explain why not.
+---Always re-resolves (snapshot + agents map are cached, so this is cheap):
+---a remembered it.tmux can be stale after a rename/kill, and keys must only
+---ever go to a pane proven to belong to this transcript RIGHT NOW.
 ---@param it giroux.Session
 ---@param cb fun(target: string|nil)
 function M.resolve(it, cb)
-  if it.tmux then
-    return cb(it.tmux)
-  end
   tmuxctl.target(it.node, it, function(target)
     if not target then
       vim.notify(
@@ -187,7 +190,8 @@ function M.read_question(it, cb)
       return cb(nil)
     end
     local _, node = nodes.get(it.node)
-    ssh.exec(node.host, ssh.login_wrap(("tmux capture-pane -p -t %s 2>/dev/null"):format(shq(t))), function(ok, stdout)
+    local cmd = ("tmux capture-pane -p -t %s 2>/dev/null"):format(shq(tmuxctl.exact(t)))
+    ssh.exec(node.host, ssh.login_wrap(cmd), function(ok, stdout)
       cb(ok and M.parse_question(stdout) or nil)
     end)
   end
@@ -209,7 +213,7 @@ function M.answer(it, digit)
     local _, node = nodes.get(it.node)
     ssh.exec(
       node.host,
-      ssh.login_wrap(("tmux send-keys -t %s %s"):format(shq(target), tostring(digit))),
+      ssh.login_wrap(("tmux send-keys -t %s %s"):format(shq(tmuxctl.exact(target)), tostring(digit))),
       function(ok, _, stderr)
         if not ok then
           return vim.notify("giroux: answer failed: " .. vim.trim(stderr or ""), vim.log.levels.ERROR)
@@ -244,7 +248,7 @@ function M.answer_multi(it, digits)
     keys[#keys + 1] = "Enter"
     ssh.exec(
       node.host,
-      ssh.login_wrap(("tmux send-keys -t %s %s"):format(shq(target), table.concat(keys, " "))),
+      ssh.login_wrap(("tmux send-keys -t %s %s"):format(shq(tmuxctl.exact(target)), table.concat(keys, " "))),
       function(ok, _, stderr)
         if not ok then
           return vim.notify("giroux: answer failed: " .. vim.trim(stderr or ""), vim.log.levels.ERROR)
@@ -426,9 +430,9 @@ function M.attach(it)
     local _, node = nodes.get(it.node)
     local cmd
     if node.host then
-      cmd = { "ssh", "-t", node.host, ssh.login_wrap(("tmux attach-session -t %s"):format(shq(target))) }
+      cmd = { "ssh", "-t", node.host, ssh.login_wrap(("tmux attach-session -t %s"):format(shq(tmuxctl.exact(target)))) }
     else
-      cmd = { "tmux", "attach-session", "-t", target }
+      cmd = { "tmux", "attach-session", "-t", tmuxctl.exact(target) }
     end
     vim.cmd.tabnew()
     local buf = vim.api.nvim_get_current_buf()
