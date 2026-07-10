@@ -496,4 +496,39 @@ function M.subagent_path(session_path, agent_id)
   return session_path:gsub("%.jsonl$", "") .. "/subagents/agent-" .. agent_id .. ".jsonl"
 end
 
+---Record `timestamp` (ISO-8601, always UTC — the trailing Z) -> epoch seconds.
+---os.time() reads a field table as LOCAL time, so the naive parse lands one
+---timezone-offset off; correct by measuring that offset at the parsed instant
+---(os.date("!*t") is the UTC view of an epoch, so the round-trip difference IS
+---the local offset, DST included). Fractional seconds are preserved.
+---@param ts string|nil
+---@return number|nil epoch seconds, nil when `ts` isn't an ISO timestamp
+function M.utc_epoch(ts)
+  if type(ts) ~= "string" then
+    return nil
+  end
+  local y, mo, d, h, mi, s = ts:match("^(%d+)-(%d+)-(%d+)T(%d+):(%d+):([%d%.]+)")
+  if not y then
+    return nil
+  end
+  local sec = tonumber(s)
+  if not sec then
+    return nil
+  end
+  local as_local = os.time({
+    year = tonumber(y),
+    month = tonumber(mo),
+    day = tonumber(d),
+    hour = tonumber(h),
+    min = tonumber(mi),
+    sec = math.floor(sec),
+    isdst = false,
+  })
+  if not as_local then
+    return nil
+  end
+  local offset = os.difftime(as_local, os.time(os.date("!*t", as_local) --[[@as osdateparam]]))
+  return as_local + offset + (sec % 1)
+end
+
 return M

@@ -95,16 +95,9 @@ local function lines_of(s)
   return vim.split(s or "", "\n", { plain = true })
 end
 
----ISO ts -> epoch seconds (good enough for durations).
+---ISO ts -> epoch seconds (UTC-correct; fractional seconds kept for durations).
 local function epoch(ts)
-  if not ts then
-    return nil
-  end
-  local y, mo, d, h, mi, s = ts:match("(%d+)-(%d+)-(%d+)T(%d+):(%d+):([%d%.]+)")
-  if not y then
-    return nil
-  end
-  return os.time({ year = y, month = mo, day = d, hour = h, min = mi, sec = math.floor(s) }) + (s % 1)
+  return transcript.utc_epoch(ts)
 end
 
 ---Head for a TaskUpdate call. `input` only ever carries {taskId, status} or

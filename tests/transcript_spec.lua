@@ -66,4 +66,25 @@ return {
     assert(out[1].offset == 100)
     assert(lines:resume_offset() == 108)
   end,
+
+  ["utc_epoch: record timestamps are UTC, not local time"] = function()
+    -- property: for any epoch, formatting it as a UTC ISO string and parsing
+    -- it back must round-trip exactly — in EVERY host timezone. The old parse
+    -- read UTC fields as local time, skewing every age by the UTC offset.
+    for _, t in ipairs({ 0, 1735689600, 1783652379 }) do
+      local iso = os.date("!%Y-%m-%dT%H:%M:%SZ", t) --[[@as string]]
+      assert(
+        transcript.utc_epoch(iso) == t,
+        ("round-trip %d via %s got %s"):format(t, iso, tostring(transcript.utc_epoch(iso)))
+      )
+    end
+    -- fractional seconds survive (feed durations are sub-second)
+    local frac = transcript.utc_epoch("2026-07-09T12:00:00.500Z")
+    local whole = transcript.utc_epoch("2026-07-09T12:00:00Z")
+    assert(frac and whole and math.abs((frac - whole) - 0.5) < 1e-9, "fraction kept")
+    -- garbage degrades to nil, never a crash or a guess
+    assert(transcript.utc_epoch(nil) == nil)
+    assert(transcript.utc_epoch("") == nil)
+    assert(transcript.utc_epoch("not a timestamp") == nil)
+  end,
 }

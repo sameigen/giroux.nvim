@@ -106,9 +106,10 @@ end
 ---  ●→○ edge is pre-watch history and must NOT latch a (✓) done/unseen.
 local function derive(tr, live)
   live = live ~= false
-  -- staleness is the file's age, not when we happened to read it: only a
-  -- live append (after we've caught up to the seed window) bumps the clock.
-  local age = os.time() - (tr.session.mtime or os.time())
+  -- staleness is the age of the newest RECORD, not the file's mtime: an idle
+  -- claude process touches its transcript without appending (verified live),
+  -- so mtime keeps a days-dead session looking minutes-fresh forever.
+  local age = sessions.age_of(tr.session, os.time())
   -- Enrich with `claude agents --json`, when available. It supplies the needs-you
   -- signal (waitingFor) that a transcript tail can't, and a daemon-reported
   -- "working" status. But "listed" does NOT prove "healthy" — a hung/zombie pid
@@ -224,6 +225,9 @@ local function feed_line(tr, line)
   for _, e in ipairs(tr.parser:feed(line .. "\n")) do
     tr.acc:add(e)
     tr.todos:add(e)
+    if e.ts then
+      tr.session.last_event_at = transcript.utc_epoch(e.ts) or tr.session.last_event_at
+    end
     -- any fresh byte clears a stale question latch; a still-open one is
     -- re-confirmed by the next probe tick.
     tr.question = false
@@ -533,6 +537,15 @@ function M.discover()
   sessions.list(state.opts or {}, reconcile)
   M.refresh_agents()
   M.probe_questions()
+  -- reap provably dead tmux shells (claude exited, bare shell lingering) so
+  -- they stop accumulating — and stop polluting correlation candidates.
+  state.last_reap = state.last_reap or {}
+  for node_name in pairs(nodes.all()) do
+    if os.time() - (state.last_reap[node_name] or 0) >= 600 then
+      state.last_reap[node_name] = os.time()
+      require("giroux.dispatch").auto_reap(node_name)
+    end
+  end
 end
 
 ---Light pass: refresh the liveness signals without re-listing files. Runs
@@ -583,7 +596,7 @@ function M.probe_questions()
     local s = tr.session
     tmuxctl.target(s.node, s, function(target) -- sets s.tmux (cached listing)
       local steerable = target ~= nil
-      local probeable = steerable and not next(tr.parser:pending()) and (now - (s.mtime or now)) >= 3
+      local probeable = steerable and not next(tr.parser:pending()) and sessions.age_of(s, now) >= 3
       if probeable or tr.question then
         steer.read_question(s, function(q)
           local was = tr.question

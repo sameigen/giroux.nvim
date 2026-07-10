@@ -48,14 +48,20 @@ local function save_group_by()
   end
 end
 
-local function age_str(mtime)
-  local d = os.time() - (mtime or os.time())
+---Age of the newest transcript RECORD (mtime only as a fallback before any
+---record is parsed) — mtime alone lies: idle claude processes touch days-old
+---transcripts, which showed long-dead sessions as minutes-fresh.
+---@param it giroux.Session
+local function age_str(it)
+  local d = math.floor(os.time() - (it.last_event_at or it.mtime or os.time()))
   if d < 60 then
-    return ("%ds"):format(d)
+    return ("%ds"):format(math.max(0, d))
   elseif d < 3600 then
     return ("%dm"):format(math.floor(d / 60))
+  elseif d < 86400 then
+    return ("%dh"):format(math.floor(d / 3600))
   end
-  return ("%dh"):format(math.floor(d / 3600))
+  return ("%dd"):format(math.floor(d / 86400))
 end
 
 local function trunc(s, n)
@@ -147,7 +153,7 @@ function M._line(it, hide)
     cols[#cols + 1] = trunc(it.project, 22)
   end
   cols[#cols + 1] = trunc(display_title(it), 34)
-  cols[#cols + 1] = ("%4s"):format(age_str(it.mtime))
+  cols[#cols + 1] = ("%4s"):format(age_str(it))
   cols[#cols + 1] = trunc(info, 44)
   -- compact badges, appended un-truncated (never swallowed by the info
   -- column's 44-char cap): queued input count, permission mode (plan
@@ -190,7 +196,7 @@ function M._subline(it)
     it.state .. " ",
     trunc(typ, 15),
     trunc(desc, 38),
-    ("%4s"):format(age_str(it.mtime)),
+    ("%4s"):format(age_str(it)),
   }
   return "     ⤷ " .. table.concat(cols, " ")
 end

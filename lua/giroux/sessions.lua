@@ -37,6 +37,20 @@ M.TAIL_BYTES = 32768
 ---@field ctx_pct integer|nil context-window pressure, 0-100 (giroux.stats)
 ---@field model string|nil most recent model id used this session
 ---@field mode string|nil permission mode (plan|acceptEdits|auto|bypassPermissions|default)
+---@field last_event_at number|nil epoch of the newest record timestamp seen —
+---the honest activity clock. File mtime is NOT: an idle claude process touches
+---its transcript without appending records (verified live 2026-07-09: mtime
+---minutes old, last record nine days old), so mtime-based age showed dead
+---sessions as fresh. mtime remains the discovery gate only.
+
+---A session's activity age in seconds: record-timestamp first, mtime fallback
+---(no parsed timestamp yet). Single source for state derivation + display.
+---@param s {last_event_at: number|nil, mtime: integer|nil}
+---@param now integer
+---@return number
+function M.age_of(s, now)
+  return now - (s.last_event_at or s.mtime or now)
+end
 
 ---State proof from parser pending-set + turn-in-flight + transcript age
 ---(DESIGN.md §4). WORKING is proven by either an unresolved tool_use OR an
@@ -133,7 +147,7 @@ function M.parse_scan(node_name, stdout, now)
     for _, call in pairs(parser:pending()) do
       cur.pending[#cur.pending + 1] = call.name
     end
-    cur.state = M.derive_state(parser:pending(), now - cur.mtime, parser:in_turn())
+    cur.state = M.derive_state(parser:pending(), M.age_of(cur, now), parser:in_turn())
     cur.activity = acc:recent_line()
     cur.touched = acc.recent_files[#acc.recent_files]
     local todo_sum = todo_acc:summary()
@@ -148,11 +162,15 @@ function M.parse_scan(node_name, stdout, now)
     local mtime, size, birth, path = line:match("^" .. MARK .. " (%d+) (%d+) (%d+) (.+)$")
     if mtime then
       finish()
+      -- stat birth is 0 on filesystems without birthtime (Linux %W): that's
+      -- "unknown", not "the epoch" — a 0 birth fed to correlation windows made
+      -- every candidate look hours away.
+      local b = tonumber(birth)
       cur = {
         node = node_name,
         mtime = tonumber(mtime),
         size = tonumber(size),
-        birth = tonumber(birth),
+        birth = b ~= 0 and b or nil,
         path = path,
         project = M.project_display(path),
       }
@@ -169,6 +187,9 @@ function M.parse_scan(node_name, stdout, now)
         for _, e in ipairs(parser:feed(line .. "\n")) do
           acc:add(e)
           todo_acc:add(e)
+          if e.ts then
+            cur.last_event_at = transcript.utc_epoch(e.ts) or cur.last_event_at
+          end
           if e.kind == "session_meta" then
             if e.key == "ai-title" then
               cur.title = e.value
@@ -222,12 +243,13 @@ function M.list(opts, cb)
           for line in vim.gsplit(stdout, "\n", { trimempty = true }) do
             local mtime, size, birth, path = line:match("^(%d+) (%d+) (%d+) (.+)$")
             if path then
+              local b = tonumber(birth) -- 0 = birthtime unsupported (Linux %W), treat as unknown
               local item = {
                 node = name,
                 path = path,
                 mtime = tonumber(mtime),
                 size = tonumber(size),
-                birth = tonumber(birth),
+                birth = b ~= 0 and b or nil,
                 project = M.project_display(path),
               }
               local sub = M.subagent_of(path)

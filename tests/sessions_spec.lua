@@ -116,7 +116,9 @@ return {
         type = "assistant",
         uuid = "a1",
         sessionId = "s1",
-        timestamp = "2026-06-11T05:00:00.000Z",
+        -- a LIVE timestamp: state age runs off record timestamps now, so a
+        -- working fixture must look recently-written in record terms too
+        timestamp = os.date("!%Y-%m-%dT%H:%M:%S.000Z", now - 5),
         message = {
           id = "m1",
           model = "x",
@@ -146,6 +148,33 @@ return {
     assert(items[1].pending[1] == "Bash")
     assert(items[2].state == "○" and items[2].last_prompt == "ship it", vim.inspect(items[2]))
     assert(items[1].project == "~/Code/app")
+  end,
+
+  ["sessions: a touched file with old records is stale, not fresh"] = function()
+    -- the real-world lie this guards: an idle claude process touches its
+    -- transcript (mtime = minutes ago) without appending records (last record
+    -- = days ago). The activity clock must follow the RECORDS.
+    local now = os.time()
+    local old_ts = os.date("!%Y-%m-%dT%H:%M:%S.000Z", now - 9 * 86400)
+    local stdout = table.concat({
+      ("===GIROUX=== %d 500 %d /p/-Users-dev-Code-app/s9.jsonl"):format(now - 120, now - 10 * 86400),
+      J({
+        type = "system",
+        subtype = "turn_duration",
+        uuid = "td9",
+        sessionId = "s9",
+        timestamp = old_ts,
+        durationMs = 5,
+        messageCount = 1,
+      }),
+      "",
+    }, "\n")
+    local items = sessions.parse_scan("workhorse", stdout, now)
+    assert(#items == 1)
+    assert(math.abs(sessions.age_of(items[1], now) - 9 * 86400) < 2, "age follows records, not the touched mtime")
+    assert(items[1].state == "~", "nine-day-old records = stale, whatever mtime claims: " .. items[1].state)
+    -- and without any timestamped record, mtime remains the honest fallback
+    assert(sessions.age_of({ mtime = now - 42 }, now) == 42)
   end,
 
   ["sessions: big-file tail drops the partial first line"] = function()
