@@ -24,6 +24,7 @@
 ---@field discover boolean auto-discover online macOS tailnet peers via `tailscale status --json`
 ---@field discover_tag string|nil only discover peers carrying this tailscale ACL tag (e.g. "tag:agent-host")
 ---@field tmux_rename boolean rename wrapper-minted tmux sessions to the transcript's ai-title
+---@field reap_auto boolean kill giroux tmux sessions that are provably dead shells (detached, claude exited, empty process tree) — checked every ~10min per node
 ---@field roots string[] remote directories scanned for repos when dispatching
 ---@field refresh_interval integer seconds between roster display heartbeats — re-renders so the clock + age columns stay live even when no data changes (0 disables)
 ---@field live_interval integer seconds between liveness polls (process truth + needs-you + tmux title spinner) between the heavier file-listing discoveries
@@ -45,6 +46,7 @@ M.defaults = {
   discover = false,
   discover_tag = nil,
   tmux_rename = true,
+  reap_auto = true,
   roots = { "~/Code" },
   refresh_interval = 1,
   live_interval = 3,

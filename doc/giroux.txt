@@ -243,8 +243,12 @@ Every keymap is remappable; set an action to `false` to disable it.
 One ssh channel per node tails every active transcript (path-prefixed, demuxed
 locally) — channel use is O(nodes), not O(sessions). The parser normalizes the
 JSONL into events; the unresolved-tool-call set plus turn-in-flight plus file
-age prove the state glyph. Steering correlates a transcript to its tmux session
-by cwd-slug with a creation-time tiebreak.
+age prove the state glyph (age follows record timestamps, not file mtime — an
+idle claude touches its transcript without appending). Steering correlates a
+transcript to its tmux session exactly: `claude agents --json` maps sessionId
+to pid, and the pid's process ancestry identifies the owning tmux pane. No cwd
+or timing heuristics. Detached sessions whose claude exited (bare shells) are
+reaped automatically (`reap_auto`).
 
 Design rationale lives in DESIGN.md, the build map in ARCHITECTURE.md.
 

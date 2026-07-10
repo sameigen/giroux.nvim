@@ -374,6 +374,73 @@ end
 M._repo_label = repo_label -- exposed for tests
 
 M.IDLE_REAP_SECS = 1800 -- detached + silent this long = reapable
+M.REAP_GRACE_SECS = 600 -- min session age before auto-reap may touch it
+
+---Sessions that are PROVABLY dead shells: every pane's process tree is empty.
+---The wrapper runs claude as a job under an interactive shell, so when claude
+---exits the bare shell keeps the session alive forever — that's the leak. A
+---childless pane can't be hosting an agent (a running, or even C-z-suspended,
+---claude is still a child; so is any foreground job the human left behind),
+---so killing it destroys nothing. Attached sessions and sessions younger than
+---`grace` (dispatch just created them; claude hasn't spawned yet) are never
+---touched. Pure.
+---@param snap giroux.TmuxSnapshot
+---@param now integer
+---@param grace integer seconds since session creation before eligible
+---@return string[] session names
+function M.dead_shells(snap, now, grace)
+  local has_child = {}
+  for _, ppid in pairs(snap.parent) do
+    has_child[ppid] = true
+  end
+  local alive, seen, order = {}, {}, {}
+  for _, p in ipairs(snap.panes) do
+    if not seen[p.name] then
+      seen[p.name] = true
+      order[#order + 1] = p.name
+    end
+    if p.attached or has_child[p.pane_pid] or (now - (p.created or now)) < grace then
+      alive[p.name] = true
+    end
+  end
+  local out = {}
+  for _, name in ipairs(order) do
+    if not alive[name] then
+      out[#out + 1] = name
+    end
+  end
+  return out
+end
+
+---Kill provably dead giroux sessions on a node (no confirmation — there is
+---nothing to lose in an empty shell). Fired periodically by the monitor;
+---`reap_auto = false` disables.
+---@param node_name string
+function M.auto_reap(node_name)
+  if require("giroux").config.reap_auto == false then
+    return
+  end
+  local tmuxctl = require("giroux.tmuxctl")
+  tmuxctl.invalidate(node_name) -- reap on a fresh snapshot, not a 5s-old one
+  tmuxctl.snapshot(node_name, function(snap)
+    local dead = M.dead_shells(snap, os.time(), M.REAP_GRACE_SECS)
+    if #dead == 0 then
+      return
+    end
+    local parts = {}
+    for _, name in ipairs(dead) do
+      parts[#parts + 1] = ("tmux kill-session -t %s 2>/dev/null"):format(shq(tmuxctl.exact(name)))
+    end
+    local _, node = nodes.get(node_name)
+    ssh.exec(node.host, ssh.login_wrap(table.concat(parts, "; ") .. "; true"), function(ok)
+      if not ok then
+        return
+      end
+      tmuxctl.invalidate(node_name)
+      vim.notify(("giroux: reaped %d dead tmux shell(s) on %s"):format(#dead, node_name))
+    end)
+  end)
+end
 
 ---Parse `tmux list-sessions` reap output: name TAB attached TAB activity.
 ---@param stdout string
@@ -432,7 +499,7 @@ function M.clean(opts)
           for _, r in ipairs(targets) do
             ssh.exec(
               node.host,
-              ssh.login_wrap(("tmux kill-session -t %s 2>/dev/null"):format(shq(r.name))),
+              ssh.login_wrap(("tmux kill-session -t %s 2>/dev/null"):format(shq(tmuxctl.exact(r.name)))),
               function() end
             )
           end

@@ -37,4 +37,33 @@ return {
     local grace = { path = match.path, birth = since - 3 }
     assert(dispatch._is_dispatched_session(grace, slug, since), "within 5s skew grace -> yes")
   end,
+
+  ["dispatch: dead_shells reaps only childless, detached, aged panes"] = function()
+    local tmuxctl = require("giroux.tmuxctl")
+    local now = 100000
+    local snap = tmuxctl.parse_list(table.concat({
+      ("giroux/dead-a1b2\t100\t/x\t%d\t0\t"):format(now - 7200), -- childless + detached + old -> reap
+      ("giroux/live-c3d4\t200\t/x\t%d\t0\t"):format(now - 7200), -- claude child -> keep
+      ("giroux/seen-e5f6\t300\t/x\t%d\t1\t"):format(now - 7200), -- attached -> keep (human looking at it)
+      ("giroux/new-a9b8\t400\t/x\t%d\t0\t"):format(now - 30), -- fresh dispatch, claude not up yet -> keep
+      "===GIROUX-PS===",
+      "100 1",
+      "200 1",
+      "210 200", -- a running (or C-z-suspended) claude is a child
+      "300 1",
+      "400 1",
+    }, "\n"))
+    local dead = dispatch.dead_shells(snap, now, dispatch.REAP_GRACE_SECS)
+    assert(#dead == 1 and dead[1] == "giroux/dead-a1b2", vim.inspect(dead))
+    -- a session is one unit: if ANY of its panes has work, no pane of it dies
+    local multi = tmuxctl.parse_list(table.concat({
+      ("giroux/split-1111\t500\t/x\t%d\t0\t"):format(now - 7200),
+      ("giroux/split-1111\t600\t/x\t%d\t0\t"):format(now - 7200),
+      "===GIROUX-PS===",
+      "500 1",
+      "600 1",
+      "610 600",
+    }, "\n"))
+    assert(#dispatch.dead_shells(multi, now, 600) == 0, "one busy pane protects the whole session")
+  end,
 }
